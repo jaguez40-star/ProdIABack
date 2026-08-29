@@ -207,6 +207,9 @@ se salta el LDAP.
 - **Respetar el periodo de la pregunta.** Fue una fuente repetida de bugs silenciosos:
   responder el mes vigente ignorando el mes pedido, sin avisar.
 - **Español** en respuestas y descripciones de avance.
+- **Breve y claro.** La respuesta corta primero: conclusión, y solo el dato que la sostiene.
+  Nada de tablas, listas ni resúmenes que no se hayan pedido. Si hay que decidir algo, una
+  pregunta concreta al final — no un menú de opciones. Cuanto más corto, más productivo.
 
 ---
 
