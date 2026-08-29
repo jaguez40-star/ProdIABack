@@ -256,6 +256,55 @@ Quedaron sin tocar 7 archivos sueltos del commit de julio que el `.gitignore` no
 (`DIFERIDAS_MES.csv`, `image.png`, `start.bat`, `README.md`, `.claude/`, `.codex/`,
 `.vscode/`), y el postmortem sigue solo en el monorepo.
 
+### 7. El pipeline queda definido, y automatizado su último tramo
+
+El usuario fijó el proceso completo:
+
+```
+LOCAL (sin VPN)          PRUEBAS (con VPN)                              139
+editar ─push─→ GitHub ─pull─→ Repo ProdIA (probar)
+                                   │ skill migrar-a-azure
+                                   ▼
+                          APLICACIONES_AZURE ─push─→ Azure DevOps ─→ producción
+```
+
+**Decisión explícita: las dos carpetas de Pruebas no comparten `.git`.** Se propuso
+resolver el puente con dos remotos en un solo checkout —más simple y con fidelidad
+garantizada por SHA— y el usuario lo descartó: no quiere que los dos git convivan en la
+misma carpeta. Es una separación defendible: hace imposible empujar por error a Azure algo
+sin probar, y mantiene el checkout de pruebas libre de historia corporativa.
+
+Aceptada esa restricción, el puente tiene que ser una copia de archivos — **y una copia no
+garantiza fidelidad**. Ese es exactamente el paso cuya causa raíz el postmortem del 26-ago
+no pudo aislar, cuando llegaron a producción un `app.py` con puerto 5007 y un login viejo.
+
+**Solución: medir en vez de confiar.** Se creó el skill `migrar-a-azure`
+(`frontend/.claude/skills/migrar-a-azure/`), con dos piezas: `SKILL.md` con el
+procedimiento y `migrar_a_azure.ps1` con el trabajo. Qué hace:
+
+| Paso | Por qué |
+|---|---|
+| Exige el origen limpio | Lo publicado debe corresponder a un commit real de GitHub |
+| Informa antes de escribir | Nuevos, modificados y **los que sobran en destino** |
+| Copia en modo espejo | Sin eso, un archivo borrado sobrevive para siempre en Azure |
+| Excluye `.env`, entornos, `vector_db`, respaldos | Pisar el `.env` cambiaría las credenciales del destino |
+| **Verifica hash de blob de cada archivo** | Si uno solo difiere, aborta y no publica |
+| Escribe el SHA de GitHub en el commit de Azure | Sin eso no se sabe qué versión está desplegada |
+
+Por defecto **solo informa**; hay que pasar `-Aplicar` o `-Push` para que escriba.
+
+Detalle que suele morder y que el script contempla: **robocopy devuelve 0 a 7 en éxito**,
+solo 8 o más es fallo. Un `-ne 0` daría falsos errores.
+
+También se ajustó el `.gitignore`: `.claude/` pasó a `.claude/*` con excepción para
+`.claude/skills/`, porque los skills son procedimiento del proyecto y deben versionarse,
+mientras que `settings.local.json` sigue siendo local. Verificado que el skill se versiona
+y que los ajustes locales no.
+
+⚠️ **Regla nueva: Azure solo recibe de este pipeline.** Nunca commitear directo allí. Ya
+pasó dos veces —el commit inicial de julio y los arreglos a mano en el 139 el 26-ago— y es
+justo así como nacen las «dos últimas versiones».
+
 ---
 
 ## Pendientes al cierre del 29 de agosto
@@ -269,6 +318,8 @@ Quedaron sin tocar 7 archivos sueltos del commit de julio que el `.gitignore` no
 - [x] Retirar el gitlink `INGESTA/Rep_Prod`.
 - [x] Cerrar el agujero del `.gitignore` que habría versionado `.env.bak` con credenciales.
 - [x] Versionar `CLAUDE.md` y `BITACORA.md` dentro de los dos repos.
+- [x] Definir el pipeline completo, con sus cinco reglas.
+- [x] Crear el skill `migrar-a-azure` con verificación de fidelidad hash por hash.
 
 **Del entorno de pruebas** — *lo siguiente por hacer*
 
@@ -361,6 +412,72 @@ Sin esto, cada «solo cambia dos puertos» vuelve a costar ocho horas.
   interno, pero decide si el 5030 queda expuesto a la red.
 - **Los tres `.env` con credenciales** copiados a la máquina local
   (`frontend\.env`, `backend\.env`, `backend\.env.bak`): borrarlos si no se van a usar ahí.
+
+---
+
+## 👉 Dónde retomamos (2026-08-29, fin de sesión)
+
+*Punto de continuidad: la sesión anterior terminó aquí. Esto es lo primero que hay que
+mirar al abrir Claude Code en esta carpeta.*
+
+### Lo que ya está montado y funcionando
+
+- **GitHub `jaguez40-star` es el origen de trabajo.** `ProdIAWebFront` y `ProdIABack`
+  reescritos limpios, verificados contra el remoto.
+- **El servidor de pruebas ya tiene el clon** en `C:\APLICACIONES\ProdIA\Repo ProdIA`,
+  layout `frontend\` + `backend\`, espejo de producción.
+- **El pipeline está definido** (sección 9 de `CLAUDE.md`) y su último tramo automatizado
+  con el skill `migrar-a-azure`.
+- **La verificación de repos está hecha**: Azure y GitHub tenían el mismo código, y la
+  desincronización del postmortem quedó cerrada.
+
+### Lo siguiente, en orden
+
+**1. Poner la app a correr en el servidor de pruebas.** Es lo único que falta para cerrar el
+ciclo completo, y nada más puede validarse sin ello:
+
+```powershell
+$raiz = 'C:\APLICACIONES\ProdIA\Repo ProdIA'
+# a) los .env no vienen en el repo — copiarlos y pasar el chequeo de BOM
+# b) py -0    → hace falta 3.12.x, NO 3.14 (onnxruntime sin wheels)
+# c) cd "$raiz\frontend";        .\install.bat
+# d) cd "$raiz\backend\backend"; uv sync
+# e) arrancar y verificar con verificar_deploy.ps1
+```
+
+**2. Crear los lanzadores adaptados al layout separado.** `iniciar_frontend.bat` sirve tal
+cual; `iniciar_backend.bat` necesita `ING_DIR=%~dp0backend` en vez de la ruta anidada. Una
+vez probados, commitearlos en su repo para que el próximo clon los traiga.
+
+**3. Estrenar el skill `migrar-a-azure`.** Todavía no se ha ejecutado ni una vez. Primera
+corrida sin parámetros, para ver el informe; conviene revisar con calma la lista de «los que
+sobran en destino», porque el checkout de Azure aún arrastra los ~151 MB de julio.
+
+**4. Alinear Azure con GitHub.** Llevar esta versión limpia a `dev`, para que producción deje
+de cargar con lo que ya limpiamos aquí.
+
+### Decisiones abiertas, pequeñas
+
+- ¿Entran o salen los 7 archivos sueltos de julio (`DIFERIDAS_MES.csv`, `image.png`,
+  `start.bat`, `README.md`, `.codex/`, `.vscode/`)?
+- ¿Se trae el `POSTMORTEM_migracion_puertos_azure_20260826.md`? Hoy vive solo en el monorepo.
+- Borrar los `.env` con credenciales que quedaron en la copia local de `Repo ProdIA`.
+- Confirmar `--host 0.0.0.0` vs `127.0.0.1` en `iniciar_backend.bat`: decide si el 5030
+  queda expuesto a la red.
+
+### Y de fondo, lo que sigue sin resolverse
+
+El tramo **Azure DevOps → servidor 139 sigue siendo manual.** Es el hop que costó las ocho
+horas del 26 de agosto. El pipeline cubre ya de local hasta Azure; falta el último salto.
+
+### Contexto que no está en el código y conviene recordar
+
+- El monorepo `ProdIA-2.0` quedó **aparte** por decisión explícita, con dos commits locales
+  sin subir (bitácora del 27-ago y los lanzadores).
+- La máquina local **no tiene VPN**: no alcanza Azure DevOps, ni la BD del 139, ni
+  `\\10.100.25.161\Datagenesis`. GitHub sí.
+- La BD local está congelada en 2026-05-18 y con corrupción en `core.fact_tabla_hoja`. No
+  sirve para validar nada con datos reales.
 
 ---
 

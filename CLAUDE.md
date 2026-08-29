@@ -271,6 +271,79 @@ con ello.
 
 ---
 
+## 9. El pipeline de despliegue
+
+Definido el 2026-08-29. Es el proceso repetible que pedía el postmortem, y sustituye a la
+cadena manual de exports y copias que costó ocho horas.
+
+```
+   LOCAL (sin VPN)              PRUEBAS (con VPN)                        139
+   ──────────────               ─────────────────                        ───
+                        ┌─ C:\APLICACIONES\ProdIA\Repo ProdIA
+   editar ──push──→ GitHub          (clon de GitHub — aquí se PRUEBA)
+                        │                    │
+                        │                    │  skill  migrar-a-azure
+                        │                    ▼
+                        └─ C:\APLICACIONES_AZURE\Repo ProdIA
+                                 (clon de Azure — aquí se PUBLICA)
+                                             │
+                                             └─push─→ Azure DevOps `dev` ──→ producción
+```
+
+### Las dos carpetas de Pruebas están separadas a propósito
+
+Cada una tiene **su propio `.git` y un único remoto**. No se mezclan: así no hay forma de
+empujar por error a Azure algo que no se ha probado, ni de contaminar el checkout de
+pruebas con historia de Azure.
+
+| Carpeta | Remoto | Para qué |
+|---|---|---|
+| `C:\APLICACIONES\ProdIA\Repo ProdIA` | GitHub `main` | Bajar lo nuevo y **probarlo** |
+| `C:\APLICACIONES_AZURE\Repo ProdIA` | Azure DevOps `dev` | **Publicar** lo ya probado |
+
+### El puente: skill `migrar-a-azure`
+
+Vive en `frontend/.claude/skills/migrar-a-azure/`. Siempre en tres tiempos:
+
+```powershell
+.\.claude\skills\migrar-a-azure\migrar_a_azure.ps1            # 1. ¿qué hay pendiente?
+.\.claude\skills\migrar-a-azure\migrar_a_azure.ps1 -Aplicar   # 2. copiar y verificar
+.\.claude\skills\migrar-a-azure\migrar_a_azure.ps1 -Push      # 3. publicar en Azure
+```
+
+Una copia de archivos **no garantiza fidelidad** — fue la causa del incidente del puerto
+5007. Por eso el script, después de copiar, compara el hash de blob de cada archivo
+versionado contra el origen y **aborta si uno solo difiere**. También copia en modo espejo
+(para que los borrados viajen), excluye `.env`, entornos y binarios regenerables, y escribe
+el SHA de GitHub en el mensaje del commit de Azure, para que siempre se sepa qué versión
+está desplegada.
+
+### Reglas del pipeline
+
+1. **Azure solo recibe de este pipeline.** Nunca commitear directo allí. Ya pasó dos veces
+   (el commit inicial de julio y los arreglos a mano en el 139 el 26-ago) y es como nacen
+   las «dos últimas versiones».
+2. **Nada llega a Azure sin haber corrido en Pruebas.**
+3. **`verificar_deploy.ps1` antes de dar por bueno un despliegue**, no cuando alguien se
+   acuerda.
+4. **En local, ningún remoto de Azure ni identidad corporativa.**
+5. **El origen debe estar limpio** al migrar: lo que se publique tiene que corresponder a un
+   commit real de GitHub, o se pierde la trazabilidad.
+
+### Lo que todavía es manual
+
+El tramo **Azure DevOps → servidor 139** no está automatizado. Es el hop que más caro salió
+y el siguiente candidato a resolverse.
+
+### Sobre desarrollar en local
+
+Desde local **no hay VPN**, así que no se alcanza la BD del 139. En local se puede editar,
+correr tests y goldens, y medir el DOM — nada de eso depende de los datos. Pero **cualquier
+validación contra datos reales ocurre en Pruebas.** La BD local está congelada en mayo de
+2026 y arrastra corrupción en `core.fact_tabla_hoja`: no sirve como referencia.
+
+---
+
 *Ver `BITACORA.md` para el historial. Guía de arranque detallada en
 `frontend\SETUP_LOCAL.md`. Postmortem de la migración en
 `frontend\POSTMORTEM_migracion_puertos_azure_20260826.md` si se sincroniza desde el monorepo.*
