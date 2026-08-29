@@ -347,6 +347,134 @@ validación contra datos reales ocurre en Pruebas.** La BD local está congelada
 
 ---
 
+## 10. Modo Planner (`plan:`) y el flujo profesional
+
+> Fuente canónica: `backend/clmd/CLAUDE_muestra.md` §0.2, §0.3, §15 y §17.5.
+> Esta sección lo resume y lo adapta a ProdIA.
+
+### 10.1 El flujo profesional — 6 pasos
+
+Antes de cualquier tarea no trivial:
+
+```
+Mapeo → Auditoría → Diagnóstico → Propuesta → Aplicación → Verificación
+```
+
+**No saltarse pasos. Propuesta completa antes de aplicar.** Si un hallazgo toca una decisión
+cerrada del usuario, detenerse y escalar.
+
+### 10.2 🔴 Directiva obligatoria: auditar ANTES de escribir el plan
+
+**Los pasos 1-3 (Mapeo + Auditoría + Diagnóstico) se ejecutan internamente ANTES de entregar
+un plan.** El plan que llega al usuario debe ser ya equivalente a un **v2 auditado**.
+
+❌ **Nunca** entregar un «v1 rápido» sabiendo que falta auditar, para arreglarlo en «v2»
+cuando el usuario detecte los fallos. Eso traslada al usuario la carga de validar la calidad
+del plan, y es inaceptable.
+
+Se ganó a los golpes: hubo planes improvisados que produjeron 13 y 25 hallazgos en su v2 —
+hallazgos que debieron descubrirse antes de entregar nada.
+
+**La auditoría es obligatoria si la tarea cumple ≥1 de estos criterios:**
+
+- Toca más de 3 archivos.
+- Introduce funciones, módulos o utilidades nuevas.
+- Modifica archivos compartidos (`multitab_shell.js`, `app.py`, `routes/api.py`, CSS global).
+- Implica cambios en el contrato entre Flask y INGESTA.
+- Toca el clasificador o el Motor Q v2.
+
+**Acciones mínimas antes de escribir:**
+
+1. **Grep del patrón ya existente.** Si vas a crear algo, mirar cómo se hizo lo equivalente.
+   Casi siempre hay un precedente resuelto — clonarlo, no reinventarlo.
+2. **Read completo del archivo a modificar.** Nunca de memoria.
+3. **Contar los call sites reales** de lo que vas a cambiar. Un `grep -n` decide el diseño:
+   si hay cinco y crees que hay cuatro, el plan nace roto.
+4. **Cruzar contra la deuda conocida** (§6 de este documento).
+
+### 10.3 Modo Planner: qué pasa cuando el usuario escribe `plan:`
+
+Claude actúa **exclusivamente como Planner**. No ejecuta código.
+
+| Regla | Detalle |
+|---|---|
+| Solo genera el plan | Cero archivos fuera de `Planes/`. Cero comandos. Cero ediciones a código |
+| 100% autocontenido | El executor **no** tiene la conversación, ni el historial de git, ni memoria |
+| Rutas absolutas | Nunca «el archivo del shell»; siempre la ruta completa |
+| Código de referencia completo | Si el plan pide crear algo, va el código entero |
+| Decisiones cerradas | El executor no decide nada, solo implementa |
+| Criterios verificables | Tabla con comando y resultado esperado |
+| Naming | `Planes/plan_[ID_TAREA]_[fecha].md` |
+| Entrega | Ruta + resumen de 5 líneas → esperar **«¿Aprobado?»** |
+
+**Secciones obligatorias del plan:**
+
+```
+0. Contexto para el agente EXECUTOR    ← proyecto, rutas, convenciones
+1. Hallazgos de la auditoría           ← 🔴 bloqueante · 🟡 relevante · 🟢 confirmación
+2. Estado actual                        ← qué está mirando el executor
+3. Especificación                       ← MODIFICAR / AÑADIR, con código exacto
+4. Orden de ejecución                   ← tabla numerada
+5. Reglas no negociables
+6. Validación                           ← 6.1 estática (executor) · 6.2 humana (usuario)
+7. Fuera de alcance                     ← explícito
+```
+
+Los hallazgos van **antes** de la especificación y **la determinan**: explican por qué la §3
+es como es. No son decorativos.
+
+**Prompt estándar para el executor:**
+
+```
+Eres un agente EXECUTOR. Lee completo el plan indicado y ejecútalo AL PIE DE LA LETRA.
+Reglas: CERO modificaciones. Orden secuencial. Si falla, DETENTE. Reporta: ✅/❌ Paso N.
+Al final: archivos tocados + "¿Hago commit?"
+```
+
+### 10.4 🔴 Regla R3 — «build verde» NO es «feature verificada»
+
+Un executor puede reportar tests ✅, lint ✅ y build ✅ **con la feature rota en runtime**.
+No tiene navegador: no puede hacer hover, ni ver si un panel se pinta.
+
+**Lo que ninguna herramienta automática detecta:**
+
+- Animaciones interrumpidas, re-renders innecesarios.
+- Layout colapsado por flex/grid en un viewport real.
+- Eventos de ratón mal cableados (hover roto, clic duplicado).
+- Un panel que se destruye al repintar su contenedor.
+
+**Protocolo antes de declarar algo «completado»:**
+
+1. Abrir `http://localhost:5029/<ruta>` y validar carga, interacciones del camino feliz,
+   persistencia al navegar fuera y volver, y **F12 → Console con 0 errores**.
+2. Si no se puede abrir el navegador, el estado correcto es
+   **«implementado, PENDIENTE de validación humana»**, no «verificado».
+3. **El único que marca ✅ una feature visual es el usuario.**
+
+Esto vale doble aquí, porque la app real corre en el servidor de pruebas, no en local.
+
+### 10.5 Anti-patrones prohibidos
+
+- ❌ Entregar un plan v1 «rápido» sabiendo que falta auditar.
+- ❌ Asumir rutas, convenciones o configuraciones «de memoria».
+- ❌ «Esto probablemente funciona, ya lo confirmará el test» — confirmar **antes** de escribir.
+- ❌ Esperar a que el usuario pida «aplica el flujo profesional»: ya está aplicado por defecto.
+- ❌ Justificar incoherencias con «el v2 las arreglará» — el v1 no debería existir.
+- ❌ Si un parche reactivo se acumula **más de 2 iteraciones** sin resolver el bug: **DETENER**
+  y revertir al último estado bueno conocido. No seguir parchando.
+
+### 10.6 Dónde viven los planes
+
+```
+frontend\Planes\      planes de UI, shell, paneles, login
+backend\Planes\       planes del Motor Q, features, ETL, BD
+```
+
+Cada repo guarda los suyos. El naming es `plan_<slug>_<fecha>.md`, y los planes viejos se
+conservan: son el registro de por qué el código es como es.
+
+---
+
 *Ver `BITACORA.md` para el historial. Guía de arranque detallada en
 `frontend\SETUP_LOCAL.md`. Postmortem de la migración en
 `frontend\POSTMORTEM_migracion_puertos_azure_20260826.md` si se sincroniza desde el monorepo.*
