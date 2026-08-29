@@ -1,0 +1,25 @@
+# Secretos / entorno
+# Ojo: ".env" solo cubre ese nombre exacto. Un ".env.bak" quedaba fuera y
+# se habria versionado con credenciales dentro.
+.env*
+!.env.example
+*.env.local
+*.bak
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.uv/
+
+# Datos / archivos pesados
+*.xlsm
+!Doc_Desing/*.xlsm   # (las muestras de diseño sí pueden quedar; ajustar según política)
+
+# Temporales
+*.tmp
+_tmp*/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/

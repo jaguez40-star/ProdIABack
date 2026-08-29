@@ -1,0 +1,33 @@
+# slots (ya extraídos) -> comportamiento esperado de la máquina (determinista)
+- nombre: "colapso_redundante_rubiales"
+  # Rubiales = pozo/campo/area/activo apuntan al MISMO fuente_id (redundante) -> COLAPSA y auto-resuelve
+  # a campo (prioridad canónica). Antes preguntaba (colisión dura); ahora responde directo. Ver
+  # Planes/plan_desambiguacion_colapso_prioridad_2026-07-15.md (mecanismo de colapso; F-C1).
+  slots: {entidad: "RUBIALES", nivel: null}
+  espera_status: "completo"
+  espera_intent: {entidad: "RUBIALES", nivel: "campo", rama: "A"}
+- nombre: "pista_desempata_castilla"
+  slots: {entidad: "CASTILLA", nivel: "campo"}
+  espera_status: "completo"
+  espera_intent: {entidad: "CASTILLA", nivel: "campo", rama: "A"}
+- nombre: "dual_hocol"
+  # D-D6 [2026-07-21]: las 3 filiales son un solo tipo de entidad -> Hocol se resuelve DIRECTO como
+  # filial (rama B), igual que America/Permian. El sentido ECP (operador) NO se pierde: se ofrece como
+  # zoom (nota + botón), como el Campo->Activo. Ya NO frena con la pregunta ECP/filial.
+  slots: {entidad: "HOCOL", nivel: null}
+  espera_status: "completo"
+  espera_intent: {entidad: "HOCOL", nivel: "filial", rama: "B"}
+- nombre: "unica_gor"
+  slots: {entidad: "GOR", nivel: "campo"}        # pista errada; GOR solo es gerencia → se ignora la pista
+  espera_status: "completo"
+  espera_intent: {entidad: "GOR", nivel: "gerencia", rama: "A"}
+- nombre: "prioridad_campo_chichimene"
+  # D-D5 [2026-07-15]: colisión GENUINA (pozo/campo/área con conjuntos físicos distintos), pero el
+  # nombre figura como campo -> responde DIRECTO como Campo (antes preguntaba con 3 opciones).
+  # El zoom solo se ofrecería a Activo (Chichimene no es activo -> sin zoom).
+  slots: {entidad: "CHICHIMENE", nivel: null}
+  espera_status: "completo"
+  espera_intent: {entidad: "CHICHIMENE", nivel: "campo", rama: "A"}
+- nombre: "no_existe"
+  slots: {entidad: "PARAISO_INEXISTENTE", nivel: null}
+  espera_status: "reformular"

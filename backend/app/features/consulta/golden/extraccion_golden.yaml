@@ -1,0 +1,45 @@
+# pregunta -> slots esperados (mide extracción del LLM, single-turn)
+- pregunta: "producción de Rubiales"
+  esperado: {entidad: "RUBIALES", nivel: null, producto: null, periodo: null, agregacion: null}
+- pregunta: "cuánto crudo produjo el pozo La Hocha el mes pasado"
+  esperado: {entidad: "LA HOCHA", nivel: "pozo", producto: "aceite", periodo: "mes pasado", agregacion: null}
+- pregunta: "producción del campo Castilla"
+  esperado: {entidad: "CASTILLA", nivel: "campo", producto: null, periodo: null, agregacion: null}
+- pregunta: "y el gas ahí?"                         # trampa: entidad heredada del contexto → null
+  esperado: {entidad: null, nivel: null, producto: "gas", periodo: null, agregacion: null}
+- pregunta: "y el agua de Chichimene?"              # trampa: agua (se rechaza después)
+  esperado: {entidad: "CHICHIMENE", nivel: null, producto: "agua", periodo: null, agregacion: null}
+- pregunta: "produccion de rubialess"               # trampa: typo (Capa 2 fuzzy)
+  esperado: {entidad: "RUBIALESS", nivel: null, producto: null, periodo: null, agregacion: null}
+- pregunta: "cómo va la gerencia GOR"
+  esperado: {entidad: "GOR", nivel: "gerencia", producto: null, periodo: null, agregacion: null}
+- pregunta: "producción de Hocol este mes"
+  # nivel:null — "Hocol" no trae palabra de nivel explícita; que sea filial es conocimiento del catálogo
+  # (Python/resolver), el LLM no debe inferirlo (D4/§7.6: el LLM no ve el catálogo).
+  esperado: {entidad: "HOCOL", nivel: null, producto: null, periodo: "este mes", agregacion: null}
+- pregunta: "producción de Caño Limón"
+  esperado: {entidad: "CAÑO LIMÓN", nivel: null, producto: null, periodo: null, agregacion: null}
+- pregunta: "promedio diario de crudo en Castilla en marzo"
+  esperado: {entidad: "CASTILLA", nivel: null, producto: "aceite", periodo: "marzo", agregacion: "promedio_diario"}
+- pregunta: "producción acumulada de blancos en Cusiana"
+  esperado: {entidad: "CUSIANA", nivel: null, producto: "blancos", periodo: null, agregacion: "acumulado"}
+- pregunta: "cuánto gas produjo el activo Apiay el año pasado"
+  esperado: {entidad: "APIAY", nivel: "activo", producto: "gas", periodo: "año pasado", agregacion: null}
+# 2026-07-16: "área" es sinónimo de usuario de "activo" (grupo1 no era el Activo; nivel eliminado).
+- pregunta: "cómo está el área Chichimene"
+  esperado: {entidad: "CHICHIMENE", nivel: "activo", producto: null, periodo: null, agregacion: null}
+- pregunta: "producción de la vicepresidencia VAS"
+  esperado: {entidad: "VAS", nivel: "vicepresidencia", producto: null, periodo: null, agregacion: null}
+- pregunta: "qué tal Cusiana"
+  esperado: {entidad: "CUSIANA", nivel: null, producto: null, periodo: null, agregacion: null}
+- pregunta: "dame el crudo de este mes en Rubiales"
+  esperado: {entidad: "RUBIALES", nivel: null, producto: "aceite", periodo: "este mes", agregacion: null}
+- pregunta: "producción de America"
+  # nivel:null — misma razón que Hocol: "filial" es catálogo, no texto explícito.
+  esperado: {entidad: "AMERICA", nivel: null, producto: null, periodo: null, agregacion: null}
+- pregunta: "y en abril?"                            # trampa: entidad heredada de contexto → null
+  esperado: {entidad: null, nivel: null, producto: null, periodo: "abril", agregacion: null}
+- pregunta: "producción total de blancos en marzo 2026"
+  esperado: {entidad: null, nivel: null, producto: "blancos", periodo: "marzo 2026", agregacion: "acumulado"}
+- pregunta: "producción del pozo Rubiales 12"
+  esperado: {entidad: "RUBIALES 12", nivel: "pozo", producto: null, periodo: null, agregacion: null}

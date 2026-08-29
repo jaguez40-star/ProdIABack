@@ -1,0 +1,25 @@
+[project]
+name = "robustez-ingesta-backend"
+version = "0.1.0"
+description = "Backend de ingesta del Reporte Diario de Producción"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "sqlalchemy>=2",
+    "psycopg[binary]",
+    "pydantic-settings",
+    "openpyxl",
+    "structlog",
+    "typer",
+    "python-multipart>=0.0.32",
+]
+
+[dependency-groups]
+dev = ["pytest", "httpx"]
+
+[tool.uv]
+package = false          # H4: es una aplicación, NO un paquete a construir → evita fallo de uv sync
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
