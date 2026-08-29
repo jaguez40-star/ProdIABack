@@ -477,4 +477,4 @@ conservan: son el registro de por qué el código es como es.
 
 *Ver `BITACORA.md` para el historial. Guía de arranque detallada en
 `frontend\SETUP_LOCAL.md`. Postmortem de la migración en
-`frontend\POSTMORTEM_migracion_puertos_azure_20260826.md` si se sincroniza desde el monorepo.*
+`frontend\POSTMORTEM_migracion_puertos_azure_20260826.md`.*

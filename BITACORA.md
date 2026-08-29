@@ -325,19 +325,20 @@ justo así como nacen las «dos últimas versiones».
 
 - [ ] Copiar los dos `.env` (no vienen en el repo) y pasar el chequeo de BOM.
 - [ ] Verificar `py -0` (hace falta 3.12.x, no 3.14) y correr `install.bat` + `uv sync`.
-- [ ] Crear los lanzadores adaptados al layout separado: `iniciar_backend.bat` necesita
-      `ING_DIR=%~dp0backend`.
+- [x] Crear los lanzadores adaptados al layout separado: `iniciar_backend.bat` con
+      `ING_DIR=%~dp0backend` y `--host 127.0.0.1`.
 - [ ] Arrancar y verificar con `verificar_deploy.ps1`.
 
 **De los repos**
 
-- [ ] Commitear los lanzadores adaptados, para que el próximo clon los traiga y no haya que
+- [x] Commitear los lanzadores adaptados, para que el próximo clon los traiga y no haya que
       ponerlos a mano como en la 139.
 - [ ] Llevar a Azure DevOps `dev` esta misma versión limpia, para que producción deje de
       arrastrar los 151 MB y quede alineada con GitHub.
-- [ ] Decidir si el postmortem y los 7 archivos sueltos de julio (`DIFERIDAS_MES.csv`,
-      `image.png`, `start.bat`, `.claude/`, `.codex/`, `.vscode/`, `README.md`) entran o
-      salen.
+- [x] Postmortem: **entra** (vive ya en `frontend\`). `start.bat`: **sale** (resto de julio,
+      puerto 5001 y trampolín bloqueado por WDAC; nadie lo referenciaba).
+- [ ] Decidir sobre los sueltos que quedan: `DIFERIDAS_MES.csv`, `image.png`, `.codex/`,
+      `.vscode/`, `README.md`.
 - [ ] Borrar, si ya no hacen falta, los `.env` con credenciales que quedaron en la copia
       local de `Repo ProdIA`.
 
@@ -415,6 +416,47 @@ Sin esto, cada «solo cambia dos puertos» vuelve a costar ocho horas.
 
 ---
 
+## Sesión del 29 de agosto (tarde) — Verificación contra el monorepo y layout de arranque
+
+Se comparó el espacio de trabajo contra el monorepo `ProdIA-2.0` por **hash de blob**, que
+es lo único que sirve cuando las historias de git son distintas.
+
+**El código está intacto.** De 536 archivos versionados en el monorepo, **528 son idénticos**
+y **ninguno de los que difieren es código fuente**. Las únicas diferencias eran los dos
+`.gitignore` (endurecidos a propósito) y dos `.md`. La separación en dos repos no perdió
+código.
+
+**Lo que sí faltaba, y se arregló:**
+
+- Los lanzadores del 27-ago (`iniciar_frontend.bat`, `iniciar_backend.bat`) no habían
+  llegado a ningún repo, aunque `CLAUDE.md` §4 ya los documentaba. Entraron, cada uno en el
+  suyo, y el del backend con `ING_DIR=%~dp0backend` y `--host 127.0.0.1`.
+- Estaban en LF en el origen. Se escribieron en **CRLF**: ambos usan subrutinas y saltos,
+  donde un batch en LF falla de forma errática.
+- `projecto.md` y `data/bitacora/Cambios_Agosto.md` habían **retrocedido** a una versión
+  anterior al 26-ago (decían puertos 8020/8088). Se restauraron. `projecto.md` además se
+  adaptó al layout de dos repos; `Cambios_Agosto.md` se dejó **verbatim**, porque su propio
+  pie dice que las entradas fechadas son histórico y no se tocan.
+- `data/bitacora/ProdIA_agosto_2026.md` no estaba en el repo, aunque la carpeta sí se
+  versiona. Entró verbatim, para no dejar la bitácora a medias.
+- `start.bat` (julio: puerto 5001 y el trampolín que WDAC bloquea) se borró. Nadie lo
+  referenciaba.
+- El postmortem del 26-ago dejó de vivir solo en el monorepo.
+
+**Lo que se verificó de paso, y no hizo falta tocar:** el skill `migrar-a-azure` no excluye
+`.bat` ni `.claude/skills/`, así que lo nuevo viajará a Azure sin cambios;
+`verificar_deploy.ps1` no referencia lanzadores ni rutas anidadas.
+
+**Dos riesgos anotados para antes de estrenar el skill:** compara `git ls-tree` del origen
+contra `git hash-object` del destino, así que si la máquina de Pruebas no tiene
+`core.autocrlf=true` abortará en todos los archivos de texto; y excluye `.env` exacto
+mientras el `.gitignore` del backend ya usa `.env*`.
+
+**Deuda preexistente confirmada, no tocada:** `_test_robustez.py` (f-string sin cerrar) y
+`_update_panorama_titles.py` (no es UTF-8) no compilan — pero son idénticos al monorepo y
+la app no los importa.
+
+---
 ## 👉 Dónde retomamos (2026-08-29, fin de sesión)
 
 *Punto de continuidad: la sesión anterior terminó aquí. Esto es lo primero que hay que
@@ -445,9 +487,10 @@ $raiz = 'C:\APLICACIONES\ProdIA\Repo ProdIA'
 # e) arrancar y verificar con verificar_deploy.ps1
 ```
 
-**2. Crear los lanzadores adaptados al layout separado.** `iniciar_frontend.bat` sirve tal
-cual; `iniciar_backend.bat` necesita `ING_DIR=%~dp0backend` en vez de la ruta anidada. Una
-vez probados, commitearlos en su repo para que el próximo clon los traiga.
+**2. ~~Crear los lanzadores adaptados al layout separado.~~ HECHO (29-ago, tarde).**
+`iniciar_frontend.bat` entró tal cual en `frontend\`; `iniciar_backend.bat` entró en
+`backend\` con `ING_DIR=%~dp0backend` y `--host 127.0.0.1`. Ambos commiteados. **Falta
+probarlos**: aquí no hay venv ni Python 3.12, así que su validación es en Pruebas.
 
 **3. Estrenar el skill `migrar-a-azure`.** Todavía no se ha ejecutado ni una vez. Primera
 corrida sin parámetros, para ver el informe; conviene revisar con calma la lista de «los que
@@ -458,12 +501,12 @@ de cargar con lo que ya limpiamos aquí.
 
 ### Decisiones abiertas, pequeñas
 
-- ¿Entran o salen los 7 archivos sueltos de julio (`DIFERIDAS_MES.csv`, `image.png`,
-  `start.bat`, `README.md`, `.codex/`, `.vscode/`)?
-- ¿Se trae el `POSTMORTEM_migracion_puertos_azure_20260826.md`? Hoy vive solo en el monorepo.
+- ✅ `start.bat` borrado y postmortem traído a `frontend\` (29-ago, tarde).
+- ✅ Host del 5030 fijado en `127.0.0.1`: el navegador nunca le habla, solo Flask desde la
+  misma máquina.
+- ¿Entran o salen los sueltos que quedan (`DIFERIDAS_MES.csv`, `image.png`, `README.md`,
+  `.codex/`, `.vscode/`)?
 - Borrar los `.env` con credenciales que quedaron en la copia local de `Repo ProdIA`.
-- Confirmar `--host 0.0.0.0` vs `127.0.0.1` en `iniciar_backend.bat`: decide si el 5030
-  queda expuesto a la red.
 
 ### Y de fondo, lo que sigue sin resolverse
 
