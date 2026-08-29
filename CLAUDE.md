@@ -20,8 +20,26 @@ C:\APLICACIONES\ProdIA\Repo ProdIA\
 Son **carpetas hermanas**, no anidadas. Espeja `E:\APLICACIONES\ProdIA_v2\{frontend,backend}`
 en el servidor 139.
 
-⚠️ **Estas copias no tienen `.git`.** Se retiró a propósito: no debe quedar ningún remoto
-ni historial de Azure DevOps en la máquina local. Son copias de trabajo, no checkouts.
+### De dónde viene el código y hacia dónde va
+
+```
+        github.com/jaguez40-star          ← origen de trabajo (sin VPN)
+        ├── ProdIAWebFront  →  frontend\
+        └── ProdIABack      →  backend\
+                  │
+                  ├──→ Local (esta máquina): editar
+                  └──→ Servidor de pruebas: correr y probar
+                                │
+                                └──→ Azure DevOps `dev` ──→ Servidor 139 (producción)
+```
+
+**GitHub es el puente.** La máquina local no tiene VPN y no alcanza Azure DevOps; el
+servidor de pruebas sí alcanza ambos. Por eso el flujo normal es: se edita en local, se
+sube a GitHub, se baja en pruebas, se verifica, y solo entonces se lleva a Azure DevOps
+para desplegar.
+
+⚠️ **No configurar remotos de Azure DevOps ni identidad corporativa en la máquina local.**
+Eso vive solo donde se despliega.
 
 ---
 

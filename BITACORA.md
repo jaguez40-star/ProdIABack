@@ -211,27 +211,84 @@ Las dos carpetas se copiaron a esta máquina solo para verificarlas. Hecha la ve
 - Se retiró la identidad corporativa de git que se había configurado para firmar un commit
   de sincronización; ese commit se revirtió.
 
+### 6. GitHub como puente entre las dos máquinas
+
+Decisión de fondo de la sesión: **usar GitHub (`jaguez40-star`) como origen de trabajo**,
+porque es lo único que alcanzan las dos máquinas. La local no tiene VPN y no llega a Azure
+DevOps; el servidor de pruebas llega a los dos. Queda así:
+
+```
+GitHub  ──→ Local (editar)  y  ──→ Pruebas (correr) ──→ Azure DevOps ──→ 139
+```
+
+Esto ataca directamente la fricción de fondo del proyecto: hasta hoy, el código nacía donde
+no se podía probar.
+
+**Los dos repos de GitHub se reescribieron desde cero.** No se crearon nuevos —
+`ProdIAWebFront` y `ProdIABack` ya existían— sino que se les empujó una historia nueva de un
+solo commit con el contenido verificado:
+
+| Repo | Antes | Ahora | Archivos |
+|---|---|---|---:|
+| `ProdIAWebFront` | `a2384c3` | `6bef0d9` | 262 |
+| `ProdIABack` | `2df5463` | `1584fa8` | 278 |
+
+🔑 **La limpieza salió gratis.** Al nacer la historia de un `git init` nuevo, el
+`.gitignore` que ya existía dejó fuera solos los ~151 MB de `vector_db/`, `data/*.db`,
+`data/*.zip`, copias `.bak` y temporales que Azure arrastraba desde julio. El clon del
+frontend pasó de **54.75 MiB a 12.57 MiB**. Con esto queda hecha la recomendación 3.
+
+**Dos correcciones de seguridad e higiene por el camino:**
+
+- 🔑 El `.gitignore` del backend solo tenía `.env`, que **no cubre `.env.bak`** — y ese
+  archivo, generado al arreglar el BOM, tenía credenciales de PostgreSQL dentro. Se borró
+  el archivo y la regla pasó a `.env*` con excepción para `.env.example`. Se verificó, antes
+  de subir, que ningún `.env`, `.bak` ni credencial estuviera en el índice.
+- El `.gitignore` del frontend excluía `CLAUDE.md`. Se quitó esa regla: ahora es
+  documentación del proyecto y debe versionarse. Tanto `CLAUDE.md` como `BITACORA.md` van
+  dentro de **los dos** repos, para que cada uno se explique solo al clonarlo.
+
+**Clonado final en el servidor de pruebas** desde GitHub, a
+`C:\APLICACIONES\ProdIA\Repo ProdIA\{frontend,backend}` (se borraron antes las carpetas
+previas). Verificado: `app.py`, `backend\app\main.py` y `CLAUDE.md` presentes.
+
+Quedaron sin tocar 7 archivos sueltos del commit de julio que el `.gitignore` no cubre
+(`DIFERIDAS_MES.csv`, `image.png`, `start.bat`, `README.md`, `.claude/`, `.codex/`,
+`.vscode/`), y el postmortem sigue solo en el monorepo.
+
 ---
 
 ## Pendientes al cierre del 29 de agosto
 
-**Del entorno de pruebas**
+**Ya hecho en esta sesión**
 
+- [x] Verificar que los repos están alineados (por hash de blob).
+- [x] Clonar limpio en el servidor de pruebas, con el layout de producción.
+- [x] Reescribir los repos de GitHub con historia nueva y contenido verificado.
+- [x] Limpiar los ~151 MB de extras — salió gratis al reiniciar la historia.
+- [x] Retirar el gitlink `INGESTA/Rep_Prod`.
+- [x] Cerrar el agujero del `.gitignore` que habría versionado `.env.bak` con credenciales.
+- [x] Versionar `CLAUDE.md` y `BITACORA.md` dentro de los dos repos.
+
+**Del entorno de pruebas** — *lo siguiente por hacer*
+
+- [ ] Copiar los dos `.env` (no vienen en el repo) y pasar el chequeo de BOM.
 - [ ] Verificar `py -0` (hace falta 3.12.x, no 3.14) y correr `install.bat` + `uv sync`.
 - [ ] Crear los lanzadores adaptados al layout separado: `iniciar_backend.bat` necesita
       `ING_DIR=%~dp0backend`.
 - [ ] Arrancar y verificar con `verificar_deploy.ps1`.
-- [ ] Decidir sobre los tres `.env` con credenciales que se copiaron a local
-      (`frontend\.env`, `backend\.env`, `backend\.env.bak`).
 
 **De los repos**
 
-- [ ] Sincronizar a Azure los documentos que van adelante en el monorepo
-      (`projecto.md`, `Cambios_Agosto.md`, `ProdIA_agosto_2026.md`, el postmortem).
-- [ ] Limpiar los 33 extras de `ProdIAWebFront` y añadirlos al `.gitignore`; retirar el
-      gitlink `INGESTA/Rep_Prod`.
-- [ ] Commitear los lanzadores en su repo, para que el próximo clon los traiga y no haya
-      que ponerlos a mano como en la 139.
+- [ ] Commitear los lanzadores adaptados, para que el próximo clon los traiga y no haya que
+      ponerlos a mano como en la 139.
+- [ ] Llevar a Azure DevOps `dev` esta misma versión limpia, para que producción deje de
+      arrastrar los 151 MB y quede alineada con GitHub.
+- [ ] Decidir si el postmortem y los 7 archivos sueltos de julio (`DIFERIDAS_MES.csv`,
+      `image.png`, `start.bat`, `.claude/`, `.codex/`, `.vscode/`, `README.md`) entran o
+      salen.
+- [ ] Borrar, si ya no hacen falta, los `.env` con credenciales que quedaron en la copia
+      local de `Repo ProdIA`.
 
 **De fondo**
 
@@ -265,7 +322,7 @@ Los únicos archivos donde el monorepo va adelante son cuatro documentos: `proje
 última brecha de contenido real entre las dos fuentes, y cerrarla permite declarar Azure
 como fuente única sin asteriscos.
 
-### 3. Limpiar `ProdIAWebFront`
+### 3. Limpiar `ProdIAWebFront` — ✅ **hecho el 29-ago**
 
 Sacar del índice los ~151 MB de binarios (`vector_db/`, `data/*.db`, `data/ROBUSTEZ.zip`),
 las seis copias manuales (`*.bak`, `- Copy`), los cuatro temporales y la config de editores.
