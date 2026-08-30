@@ -4,7 +4,7 @@
 > del Motor Q v2 — desde que el clasificador enruta una pregunta a "analizar" hasta que sale la
 > narrativa **HECHO → CAUSA → ACCIÓN** con su nivel de confianza. Es el hermano de `cuant.md`.
 >
-> **Audiencia:** Claude Code / el desarrollador que construya el responder de Analizar.
+> **Audiencia:** el desarrollador que construya el responder de Analizar.
 >
 > **Regla madre (idéntica a Cuantificar):** *Python calcula y decide la tesis; el LLM solo redacta.*
 > Aquí es aún más crítico: el LLM analista **tiende a inventar un rezago que no existe** (caso real
@@ -18,7 +18,7 @@
 >
 > **Estado de verificación:** cada pieza reusable de este documento se leyó del código real
 > (`analisis/api.py`, `routes/api.py`, `consulta_v2/`) el 2026-08-02, con número de línea. Los 3
-> bloqueos de datos vienen de la sesión de análisis del 2026-07-30 (bitácora CLAUDE.md padre).
+> bloqueos de datos vienen de la sesión de análisis del 2026-07-30 (bitácora de la guia padre).
 
 ---
 
@@ -364,4 +364,4 @@ rotulado "universo robustez"). Coordinar con el agente de Cuantificar para no du
 ---
 
 *Documento de diseño v1 (DRAFT). Piezas verificadas contra `analisis/api.py` el 2026-08-02 con línea.
-Bloqueos de datos: sesión de análisis del 2026-07-30 (bitácora CLAUDE.md padre). Hermano de `cuant.md`.*
+Bloqueos de datos: sesión de análisis del 2026-07-30 (bitácora de la guia padre). Hermano de `cuant.md`.*

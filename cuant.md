@@ -4,7 +4,7 @@
 > del Motor Q v2 — desde que el clasificador enruta una pregunta a "cuantificar" hasta que
 > sale el número con su huella. Es el handoff para poner el desarrollo en productivo.
 >
-> **Audiencia:** Claude Code / el desarrollador que construya el responder de Cuantificar.
+> **Audiencia:** el desarrollador que construya el responder de Cuantificar.
 >
 > **Regla madre (no negociable):** *Python calcula, el LLM solo redacta.* El LLM nunca
 > calcula, nunca genera SQL, nunca inventa números ni elige una variable. El **catálogo**
