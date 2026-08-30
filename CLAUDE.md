@@ -210,6 +210,10 @@ se salta el LDAP.
 - **Breve y claro.** La respuesta corta primero: conclusión, y solo el dato que la sostiene.
   Nada de tablas, listas ni resúmenes que no se hayan pedido. Si hay que decidir algo, una
   pregunta concreta al final — no un menú de opciones. Cuanto más corto, más productivo.
+- **Comandos: decir siempre cómo se corren.** Con cada bloque, indicar **en qué carpeta**,
+  si va **de una vez o línea por línea**, si hace falta **consola de administrador**, y qué
+  salida se espera. Si el bloque es multilínea en PowerShell, avisar de que puede quedarse
+  en `>>` y hay que pulsar Enter. Un comando sin esas cuatro cosas está a medias.
 
 ---
 
