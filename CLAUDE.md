@@ -214,6 +214,15 @@ se salta el LDAP.
   si va **de una vez o línea por línea**, si hace falta **consola de administrador**, y qué
   salida se espera. Si el bloque es multilínea en PowerShell, avisar de que puede quedarse
   en `>>` y hay que pulsar Enter. Un comando sin esas cuatro cosas está a medias.
+- **El camino más corto, siempre.** Antes de escribir un bloque, preguntarse si ya hay una
+  herramienta del proyecto que lo hace: `migrar-a-azure` publica en Azure, `install.bat`
+  instala, `verificar_deploy.ps1` verifica. Dar el comando que existe, no reconstruirlo a
+  mano paso a paso. Pasó el 30-ago: se explicó una copia manual con verificación de hash
+  para un archivo, teniendo el skill hecho desde el día anterior.
+- **Si la evidencia ya alcanza para actuar, actuar.** Verificar sirve cuando equivocarse
+  hace daño (pisar producción, cambiar de rama). No para confirmar lo que ya es evidente:
+  si la app lleva meses corriendo, sus `.env` existen — se buscan y se ponen, no se
+  encadenan tres diagnósticos para demostrarlo.
 
 ---
 
