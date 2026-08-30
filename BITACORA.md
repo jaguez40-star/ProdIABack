@@ -457,71 +457,169 @@ mientras el `.gitignore` del backend ya usa `.env*`.
 la app no los importa.
 
 ---
-## 👉 Dónde retomamos (2026-08-29, fin de sesión)
 
-*Punto de continuidad: la sesión anterior terminó aquí. Esto es lo primero que hay que
-mirar al abrir Claude Code en esta carpeta.*
+## Sesión del 30 de agosto — El pipeline completo, probado de punta a punta
 
-### Lo que ya está montado y funcionando
+Se cerró el ciclo que faltaba desde el postmortem del 26-ago: un cambio recorrió las
+**cuatro máquinas** —local, Pruebas, Azure DevOps y el servidor 139— con verificación en
+cada salto, en **28 minutos**.
 
-- **GitHub `jaguez40-star` es el origen de trabajo.** `ProdIAWebFront` y `ProdIABack`
-  reescritos limpios, verificados contra el remoto.
-- **El servidor de pruebas ya tiene el clon** en `C:\APLICACIONES\ProdIA\Repo ProdIA`,
-  layout `frontend\` + `backend\`, espejo de producción.
-- **El pipeline está definido** (sección 9 de `CLAUDE.md`) y su último tramo automatizado
-  con el skill `migrar-a-azure`.
-- **La verificación de repos está hecha**: Azure y GitHub tenían el mismo código, y la
-  desincronización del postmortem quedó cerrada.
+### Cambios de la sesión
 
-### Lo siguiente, en orden
+| Fecha | Cambio | Archivos afectados |
+|---|---|---|
+| 30-ago | El skill no publica trazas del repositorio de trabajo: copia dirigida por `git ls-tree` en vez de `robocopy /MIR`, exclusión de documentación interna, y un chequeo que aborta si encuentra una traza | `frontend/.claude/skills/migrar-a-azure/migrar_a_azure.ps1`, `SKILL.md` |
+| 30-ago | Limpieza de menciones a la herramienta de trabajo: 17 líneas en 13 archivos del front y 4 en 2 del back. Todas comentarios o documentación | `.gitignore`, `DISENO_CAPA_CONVERSACIONAL.md`, `MainChat/static/js/historial.js`, `ProdIA_Jun.md`, `arq_log.md`, `changesProdIA_last.md`, `migra.py`, `projecto.md`, `routes/auth.py`, `static/js/{dailyPerformanceReport,monthlyBalanceReport,multitab_shell,reportTabs}.js`, `backend/{analiza,cuant}.md` |
+| 30-ago | `.gitignore` del front pasa a cubrir `.env*`, no solo `.env`. Un respaldo `.env.previo_*` con credenciales quedaba visible para git y bloqueaba la migración | `frontend/.gitignore` |
+| 30-ago | Mensaje de publicación mínimo en Azure: solo `Version <sha>` y la fecha. El anterior describía el proceso de verificación. El temporal del mensaje se borra tras el commit | `migrar_a_azure.ps1` |
+| 30-ago | Marca del login un 10% mayor y en el verde corporativo `--pv-primary` (#004236). Validado visualmente en Pruebas y en producción | `frontend/static/css/login.css` |
+| 30-ago | Tres directrices de método en la sección 7: brevedad, claridad de comandos, camino más corto y actuar cuando la evidencia alcanza | `CLAUDE.md` (las tres copias) |
 
-**1. Poner la app a correr en el servidor de pruebas.** Es lo único que falta para cerrar el
-ciclo completo, y nada más puede validarse sin ello:
+### 🔴 Hallazgo mayor: el frontend del 139 llevaba desde julio en la rama equivocada
 
-```powershell
-$raiz = 'C:\APLICACIONES\ProdIA\Repo ProdIA'
-# a) los .env no vienen en el repo — copiarlos y pasar el chequeo de BOM
-# b) py -0    → hace falta 3.12.x, NO 3.14 (onnxruntime sin wheels)
-# c) cd "$raiz\frontend";        .\install.bat
-# d) cd "$raiz\backend\backend"; uv sync
-# e) arrancar y verificar con verificar_deploy.ps1
-```
+`E:\APLICACIONES\ProdIA_v2\frontend` estaba en la rama **`prodia-v2`**, no en `dev`. El
+backend sí estaba en `dev`. Por eso producción **nunca recibía** lo que se publicaba: un
+`git pull` allí traía otra rama.
 
-**2. ~~Crear los lanzadores adaptados al layout separado.~~ HECHO (29-ago, tarde).**
-`iniciar_frontend.bat` entró tal cual en `frontend\`; `iniciar_backend.bat` entró en
-`backend\` con `ING_DIR=%~dp0backend` y `--host 127.0.0.1`. Ambos commiteados. **Falta
-probarlos**: aquí no hay venv ni Python 3.12, así que su validación es en Pruebas.
+**Ahí está la causa raíz de las «dos últimas versiones» que el postmortem del 26-ago no
+supo explicar.** Los 2 commits que `prodia-v2` tenía y `dev` no eran el import inicial de
+julio —mismo contenido, historia distinta—, así que no se perdió trabajo.
 
-**3. Estrenar el skill `migrar-a-azure`.** Todavía no se ha ejecutado ni una vez. Primera
-corrida sin parámetros, para ver el informe; conviene revisar con calma la lista de «los que
-sobran en destino», porque el checkout de Azure aún arrastra los ~151 MB de julio.
+### Lo que costó, y no fue el código
 
-**4. Alinear Azure con GitHub.** Llevar esta versión limpia a `dev`, para que producción deje
-de cargar con lo que ya limpiamos aquí.
+El código estaba bien desde el principio. Los cinco obstáculos fueron de entorno:
 
-### Decisiones abiertas, pequeñas
+1. **Sin Python 3.12** en Pruebas ni en local. Resuelto con `uv python install 3.12` y
+   `uv venv --seed`, sin admin y sin tocar el PATH. `install.bat` reutiliza el venv si ya
+   existe, así que no hubo que modificarlo.
+2. **Disco lleno** en Pruebas: 0,3 GB libres. 6,4 GB recuperados vaciando cachés de pip y uv.
+3. **`uv` no podía crear enlaces duros** (`os error 396`) en carpeta con sincronización en
+   nube. Resuelto con `--link-mode=copy`.
+4. **Los `.env` repartidos entre dos despliegues viejos**, a cada uno le faltaba una pieza.
+5. **Permisos**: los repos del 139 eran de `AEUECPAPRY005P\DevOps` y git no podía escribir.
+   Resuelto clonando limpio en `E:\APLICACIONES\Repo ProdIA` y con `takeown` + `icacls`.
 
-- ✅ `start.bat` borrado y postmortem traído a `frontend\` (29-ago, tarde).
-- ✅ Host del 5030 fijado en `127.0.0.1`: el navegador nunca le habla, solo Flask desde la
-  misma máquina.
-- ¿Entran o salen los sueltos que quedan (`DIFERIDAS_MES.csv`, `image.png`, `README.md`,
-  `.codex/`, `.vscode/`)?
-- Borrar los `.env` con credenciales que quedaron en la copia local de `Repo ProdIA`.
+### 🔴 `OPS_DATABASE_URL` se pierde en cada despliegue
 
-### Y de fondo, lo que sigue sin resolverse
+Faltaba en **tres sitios a la vez**: la copia local, el despliegue del 26-ago en Pruebas y
+el `.env` vivo de producción. Sin ella, el **EBITDA Inspector** y **Analizar economía** se
+quedan sin fuente, en silencio. No es un descuido puntual: es un patrón, y el generador de
+`.env` que pide la sección 8 de `CLAUDE.md` sigue sin existir.
 
-El tramo **Azure DevOps → servidor 139 sigue siendo manual.** Es el hop que costó las ocho
-horas del 26 de agosto. El pipeline cubre ya de local hasta Azure; falta el último salto.
+### Estado verificado al cierre
 
-### Contexto que no está en el código y conviene recordar
+| Máquina | Ruta | Rama | Versión | Estado |
+|---|---|---|---|---|
+| Local (SKYNET) | `C:\APLICACIONES\ProdIA\Repo ProdIA` | `main` | `231c30a` | Editar. Sin VPN |
+| Pruebas · trabajo | `C:\APLICACIONES\ProdIA\Repo ProdIA` | `main` | `231c30a` | Probar |
+| Pruebas · Azure | `C:\APLICACIONES_AZURE\Repo ProdIA` | `dev` | `5549be4` | Publicar |
+| **139 producción** | `E:\APLICACIONES\Repo ProdIA` | `dev` | `5549be4` | **Operativo** |
 
-- El monorepo `ProdIA-2.0` quedó **aparte** por decisión explícita, con dos commits locales
-  sin subir (bitácora del 27-ago y los lanzadores).
-- La máquina local **no tiene VPN**: no alcanza Azure DevOps, ni la BD del 139, ni
-  `\\10.100.25.161\Datagenesis`. GitHub sí.
-- La BD local está congelada en 2026-05-18 y con corrupción en `core.fact_tabla_hoja`. No
-  sirve para validar nada con datos reales.
+La instalación vieja `E:\APLICACIONES\ProdIA\ProdIA\ProdIA_Front\` queda **intacta como
+respaldo**. `ProdIA_v2` quedó abandonada: no tenía `.env` ni entornos.
 
 ---
 
-*Documento de estado — actualizado 2026-08-29.*
+## Estructura actual del proyecto
+
+### Las dos aplicaciones
+
+| | `frontend\` — ProdIAWebFront | `backend\` — ProdIABack |
+|---|---|---|
+| Stack | Flask + SocketIO + Jinja2 | FastAPI, gestionado con `uv` |
+| Puerto | **5029**, expuesto (`0.0.0.0`) | **5030**, solo `127.0.0.1` |
+| Entrada | `app.py` | `backend\app\main.py` |
+| Entorno | `venv\` (pip) | `backend\.venv\` (uv) |
+| Python | 3.12.x exacto | 3.12.x exacto |
+| BD | SQL Server / Synapse + SQLite | PostgreSQL (`daily_report_prod` + `robustez_v02`) |
+
+El navegador **nunca** habla con el 5030: Flask hace de proxy vía `routes/api.py`
+(`INGESTA_API_URL`).
+
+### Endpoints de INGESTA en producción
+
+```
+/health                        /analisis/{catalogo,cobertura,densidad,desempeno,
+/reportes  /reportes/ultimo               ejecutivo,huella,president,tendencia_filial}
+/reportes/cobertura            /consulta/{preguntar,responder}
+/tablas  /tablas/arbol         /consulta2/{preguntar,golden,senal,veredicto,pozos_geo,log}
+/tablas/datos                  /ebitda/unificado-waterfall
+/kpis-prod/produccion-dia      /ingesta/{archivo,upload,upload_stream,jobs,disponibles}
+```
+
+### Herramientas del pipeline
+
+| Herramienta | Dónde | Para qué |
+|---|---|---|
+| `install.bat` | `frontend\` | Crea `venv\` e instala 156 dependencias. Reutiliza el venv si existe |
+| `iniciar_frontend.bat` | `frontend\` | Arranca Flask :5029 en la misma consola |
+| `iniciar_backend.bat` | `backend\` | Arranca INGESTA :5030 en `127.0.0.1` |
+| `verificar_deploy.ps1` | `frontend\` | 8 chequeos: puerto, login rediseñado, todos los estáticos |
+| `migrar-a-azure` | `frontend\.claude\skills\` | Publica en Azure: copia, verifica hash, chequea trazas |
+| `exportar_azure.ps1` | `frontend\` | Export limpio vía `git archive` |
+
+### El pipeline, en tres comandos
+
+```
+LOCAL                 PRUEBAS                    AZURE          139
+git push  ────────>   git pull
+                      migrar_a_azure.ps1 -Push ──────────>  git pull
+                                                            iniciar_*.bat
+                                                            verificar_deploy.ps1
+```
+
+**Lo que el skill garantiza antes de publicar:** copia dirigida por `git ls-tree` (nunca
+archivos que git ignora), verificación hash por hash de los 249 archivos, y un chequeo que
+aborta si encuentra trazas del repositorio de trabajo.
+
+**Lo que NO viaja a Azure:** `.claude`, `.codex`, `Planes`, `clmd`, `data/bitacora`,
+`CLAUDE.md`, `BITACORA.md`, más `.env`, entornos y binarios regenerables.
+
+---
+
+## 👉 Dónde retomamos (2026-08-30, fin de sesión)
+
+### Lo que ya funciona
+
+- **El pipeline completo**, probado con un cambio real de punta a punta.
+- **El 139 es autónomo**: `git pull` sin admin, `upstream` fijado en `origin/dev`.
+- **Trazabilidad por SHA**: cada commit de Azure lleva la versión del repo de trabajo, y el
+  `reflog` de cada máquina registra la fecha de cada despliegue.
+
+### Lo siguiente, en orden
+
+**1. Generador de `.env`.** Es el pendiente más caro. `OPS_DATABASE_URL` se ha perdido tres
+veces. Un script que valide variables requeridas, formato, ausencia de BOM y plantillas a
+medio llenar — lo pide la sección 8 de `CLAUDE.md` desde el 29-ago.
+
+**2. `Debug mode: on` en Flask de producción**, con el 5029 en `0.0.0.0`. El depurador de
+Werkzeug permite ejecutar código desde el navegador ante cualquier traza. Decidirlo a
+conciencia.
+
+**3. Bug del skill:** el `-Push` sale con «al día» si la copia no cambió nada, aunque el
+destino tenga commits sin publicar. Pasó tras un `-Aplicar` previo y hubo que commitear a
+mano. El `-Push` directo sí funciona.
+
+**4. Un `desplegar_139.ps1`** que haga parar → `pull` → arrancar → verificar en un comando.
+
+### Decisiones abiertas
+
+- Los dos commits ya publicados en Azure (`79d4dcf`, `5549be4`) conservan el mensaje viejo,
+  que describía el proceso. Reescribirlos exige forzar el push contra `dev`.
+- Identidades de git distintas por máquina: los commits salen como «Javier Guerrero» y como
+  «Javier Alexander Guerrero Hernandez (EAM…)». No rompe nada.
+- ¿Entran o salen los sueltos (`DIFERIDAS_MES.csv`, `image.png`, `README.md`, `.codex/`)?
+- Restos en Azure de julio: 104 archivos excluidos, 53 con trazas dentro. El skill los
+  informa pero no los borra.
+
+### Contexto que no está en el código
+
+- La máquina local **no tiene VPN**: no alcanza Azure DevOps ni la BD del 139. GitHub sí.
+- La BD local está congelada en 2026-05-18 y con corrupción en `core.fact_tabla_hoja`.
+- En Pruebas y en el 139, la BD responde con datos al día (`/reportes/ultimo` → 2026-08-23).
+- El monorepo `ProdIA-2.0` es **archivo histórico**. Hoy sirvió para recuperar credenciales
+  y documentación que se habían perdido en los despliegues.
+
+---
+
+*Documento de estado — actualizado 2026-08-30.*
