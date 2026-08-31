@@ -520,6 +520,49 @@ respaldo**. `ProdIA_v2` quedó abandonada: no tenía `.env` ni entornos.
 
 ---
 
+## Sesión del 30 de agosto (noche) — Transición del login, maqueta de MainChat y waffle a la cabecera
+
+Sesión de interfaz, no de pipeline. Punto de partida: `Login ProdIA Mascota.html` /
+`login-mascota.jsx` (diseño React aprobado, documentado en `anime_log.md`), portado a
+Flask/Jinja2 con CSS y JS clásico — sin librerías de animación.
+
+Las tres tareas de código se auditaron **dos veces cada una** (flujo profesional completo:
+mapeo → auditoría → propuesta → aplicación) antes de escribir el plan definitivo, con
+hallazgos reales en la segunda pasada — no una formalidad. Los tres planes quedan en
+`Planes/`: `plan_LOGIN-TRANSICION-SALIDA_20260830.md`,
+`plan_MAINCHAT-DEFER-SCRIPTS_20260830.md`, `plan_WAFFLE-A-CABECERA_20260830.md`.
+
+### Cambios de la sesión
+
+| Fecha | Cambio | Archivos afectados |
+|---|---|---|
+| 30-ago | Transición de salida del login: máquina de 4 fases (`idle→auth→exit→app`), el panel de login viaja a la izquierda (`translateX(-104vw)`) cruzando sobre la app de fondo, que se enciende en el mismo frame. La auditoría encontró que la imagen de fondo no estaba versionada en git (habría dado 404 en producción) y que borrar la constelación decorativa rompía `verificar_deploy.ps1`, que la usa como marcador de versión | `templates/login.html`, `static/css/login.css`, `static/js/login-transition.js` (nuevo), `static/js/login.js`, `verificar_deploy.ps1` |
+| 30-ago | Indicador «Cargando ProdIA…» tras la animación, y la app de fondo se retira antes de navegar a `/mainchat`. Medido con `curl`: el servidor responde en 15 ms — el hueco visible era del navegador (descarga y parseo de JS), no del backend | `static/js/login-transition.js`, `static/css/login.css` |
+| 30-ago | Fondo del login: de captura de pantalla a **maqueta HTML/CSS** del shell de MainChat (namespace `ltm-`, valores tomados de `acordeon.css`/`historial.css`). Una imagen de 860×715 exigía ampliarse ~180 % para llenar el hueco y salía borrosa — el HTML se renderiza nítido a cualquier tamaño | `templates/login.html`, `static/css/login.css` |
+| 30-ago | `defer` en los 4 scripts de arranque de `/mainchat` (`multitab_shell.js` pesa 448 KB sin minificar): el navegador pinta el HTML ya parseado antes de ejecutarlos. La auditoría encontró que la vista clásica `/` carga `multitab_shell.js` pero no `acordeon.js` — el cambio se condicionó a la presencia de `.mc-shell` para no romperla | `MainChat/templates/mainchat_layout.html` |
+| 30-ago | Waffle de análisis (popover «Análisis disponibles») trasladado de una columna propia de 51 px a la cabecera del panel Insights, mismo patrón que ya usaba el badge `Act:`. La vista clásica `/` conserva su columna intacta — la auditoría encontró que quitársela la habría dejado sin acceso a los análisis | `static/js/multitab_shell.js`, `MainChat/static/js/acordeon.js`, `static/css/colapsable.css`, `MainChat/templates/mainchat_layout.html`, `templates/main.html` |
+| 30-ago | Publicado a Azure DevOps `dev` desde el servidor de pruebas: 251 archivos verificados hash por hash, sin trazas del repositorio de trabajo | commit Azure `244ea27` |
+
+### 🔴 Hallazgo sin resolver, deliberadamente fuera de esta sesión
+
+`templates/base.html` carga `plotly-2.26.0.min.js` (**3.5 MB sin minificar**) de forma
+bloqueante en el `<head>`, en **todas** las páginas de la app — no solo `/mainchat`. Es
+probablemente la causa dominante del hueco de carga que esta sesión atacó por otros lados
+(indicador de carga, `defer`). No se tocó porque `Plotly.` se usa en 8 archivos JS sin
+auditar uno a uno, y el radio de impacto es toda la aplicación, no una vista. Candidato a
+tarea propia, con su propia auditoría.
+
+### Lo que no eran bugs, aunque lo parecían
+
+- El `beforeunload` de `login.js` restaura `overflow` del `body`: no reintroduce scroll
+  horizontal porque el contenedor real es `.login-grid`, no el `body`.
+- `Planes/` no migra a Azure (está en `$ExcluirRutas` de `migrar_a_azure.ps1`), así que las
+  doce menciones a `CLAUDE.md` dentro de los planes no disparan el escaneo de términos
+  prohibidos — sí lo haría un comentario en código publicado, por eso los nuevos son
+  autocontenidos.
+
+---
+
 ## Estructura actual del proyecto
 
 ### Las dos aplicaciones
@@ -546,6 +589,36 @@ El navegador **nunca** habla con el 5030: Flask hace de proxy vía `routes/api.p
 /tablas/datos                  /ebitda/unificado-waterfall
 /kpis-prod/produccion-dia      /ingesta/{archivo,upload,upload_stream,jobs,disponibles}
 ```
+
+### Login — transición de entrada (2026-08-30)
+
+Al autenticar, la columna de login se desplaza a la izquierda cruzando sobre una maqueta
+HTML/CSS del shell de MainChat (Historial + Chat), que se enciende a color en el mismo
+frame. Un indicador de carga cubre el hueco de red hasta que `/mainchat` pinta de verdad.
+
+| Pieza | Qué hace |
+|---|---|
+| `static/js/login-transition.js` | Máquina de fases, ES5, se engancha por monkey-patch de `showSuccess` — mismo patrón que `login-steps.js`, no toca `login.js` salvo una guarda de 3 líneas |
+| `.lt-app__img` / `.lt-app__veil` (`login.css`) | Maqueta del shell (namespace `ltm-`) y su velo de apagado; ya no es una captura de pantalla |
+| `.lt-loading` (`login.css`) | Indicador «Cargando ProdIA…», visible hasta que el navegador realmente navega |
+
+Reduced-motion ya estaba resuelto de antes en `login.css` (colapsa transiciones a
+`0.01ms`); el JS lo respeta saltando directo al redirect.
+
+### MainChat — shell de análisis (`multitab_shell.js` + `acordeon.js`)
+
+El panel Insights (acordeón) monta el shell de Consulta dentro de sí. El popover
+«Análisis disponibles» vive siempre en `document.body` (`position:fixed`), pero su botón
+disparador cambia de sitio según la vista:
+
+| Vista | Dónde vive el botón del waffle | Por qué |
+|---|---|---|
+| `/mainchat` | Cabecera del panel Insights, junto al badge `Act:` | `acordeon.js` la pinta; recupera 51px que antes ocupaba una columna |
+| `/` (clásica) | Columna propia `.cn-railbar` | No carga `acordeon.js`, no hay cabecera donde alojarlo |
+
+Los 4 scripts de `/mainchat` (`multitab_shell.js`, `mainchat.js`, `acordeon.js`,
+`historial.js`) cargan con `defer` desde el 30-ago: el HTML ya parseado se pinta antes de
+que se ejecuten.
 
 ### Herramientas del pipeline
 
@@ -585,6 +658,9 @@ aborta si encuentra trazas del repositorio de trabajo.
 - **El 139 es autónomo**: `git pull` sin admin, `upstream` fijado en `origin/dev`.
 - **Trazabilidad por SHA**: cada commit de Azure lleva la versión del repo de trabajo, y el
   `reflog` de cada máquina registra la fecha de cada despliegue.
+- **La transición de login y el waffle en la cabecera de Insights**, publicados en Azure
+  `dev` (`244ea27`) desde la sesión del 30-ago (noche). Validados visualmente por el
+  usuario en el servidor de pruebas antes de publicar.
 
 ### Lo siguiente, en orden
 
@@ -602,6 +678,14 @@ mano. El `-Push` directo sí funciona.
 
 **4. Un `desplegar_139.ps1`** que haga parar → `pull` → arrancar → verificar en un comando.
 
+**5. `Plotly` bloqueante en `<head>` de `base.html`** (3.5 MB, todas las páginas). Hallazgo
+de la sesión del 30-ago (noche), deliberadamente no atacado: requiere auditar 8 archivos
+JS que usan `Plotly.` antes de tocar el orden de carga. Ver esa sesión para el detalle.
+
+**6. Recapturar `Imagen1.png`** a mayor resolución (~1560×1130 o más) si se quiere volver a
+usar como fondo del login — hoy el fondo es una maqueta HTML/CSS, así que no es urgente;
+la imagen quedó en el repo sin usar, por si se retoma.
+
 ### Decisiones abiertas
 
 - Los dos commits ya publicados en Azure (`79d4dcf`, `5549be4`) conservan el mensaje viejo,
@@ -611,6 +695,9 @@ mano. El `-Push` directo sí funciona.
 - ¿Entran o salen los sueltos (`DIFERIDAS_MES.csv`, `image.png`, `README.md`, `.codex/`)?
 - Restos en Azure de julio: 104 archivos excluidos, 53 con trazas dentro. El skill los
   informa pero no los borra.
+- **¿Se descontinúa la vista clásica `/`?** Hoy obliga a mantener dos caminos para el
+  waffle de análisis (columna propia vs. cabecera). Si `/mainchat` la reemplaza del todo,
+  se puede simplificar `multitab_shell.js` retirando la detección `__cnHayAcordeon`.
 
 ### Contexto que no está en el código
 
