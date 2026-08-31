@@ -8,6 +8,12 @@ router = APIRouter(prefix="/analisis", tags=["analisis"])
 MESES_ES = ["", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
             "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
 
+# [2026-08-31] Cuántos campos bajo meta se listan en el desglose del faltante. Era 3 fijo,
+# repetido en los dos bloques que construyen `detractores`; el usuario pidió 5 para todos los
+# casos. Alimenta el panel "Producción vs Producción esperada" y la frase "Los N mayores
+# concentran ~X%" del chat, que lee len(detractores) — cambiar aquí mueve ambos a la vez.
+TOP_DETRACTORES = 5
+
 # Mapeo dim_tipo_producto -> término de negocio del conversacional.
 # 'agua' NO existe en dim_tipo_producto (solo CRUDO/GAS/BLANCOS) -> se rechazará en el slot-filling.
 PRODUCTOS_VALIDOS = [
@@ -1810,14 +1816,19 @@ def ejecutivo(entidad: str | None = Query(None), segmento: str = Query("ecp"),
                      float(r[1] or 0), float(r[2] or 0))
                     for r in grows if (r[1] or r[2])]
             gap_total_campos = sum(d[1] for d in difs)
-            detr = sorted([d for d in difs if d[1] < 0], key=lambda x: x[1])[:3]
+            # [2026-08-31] El corte pasa de 3 a 5 (TOP_DETRACTORES) — decisión del usuario: el panel
+            # "Producción vs Producción esperada" necesitaba más profundidad de lectura.
+            # La narrativa del chat se adapta sola: _dl_bloque (consulta_v2/analizar/plantilla.py)
+            # redacta "Los {n} mayores" con n = len(detractores), y la concentración se recalcula
+            # abajo sobre esta misma lista, así que el texto y la cifra siguen cuadrando.
+            detr = sorted([d for d in difs if d[1] < 0], key=lambda x: x[1])[:TOP_DETRACTORES]
             comp = sorted([d for d in difs if d[1] > 0], key=lambda x: -x[1])[:2]
-            top3 = sum(d[1] for d in detr)
-            # Concentración = |top3| / |Σ TODOS los detractores (bruto)| → "del total del déficit,
-            # X% está en 3 campos". Sobre el gap NETO daría >100% cuando hay compensadores grandes.
+            top_detr = sum(d[1] for d in detr)
+            # Concentración = |top_detr| / |Σ TODOS los detractores (bruto)| → "del total del déficit,
+            # X% está en N campos". Sobre el gap NETO daría >100% cuando hay compensadores grandes.
             gap_detr_total = sum(d[1] for d in difs if d[1] < 0)
             gap_comp_total = sum(d[1] for d in difs if d[1] > 0)
-            concentracion_pct = round(abs(top3) / abs(gap_detr_total) * 100, 1) if gap_detr_total else None
+            concentracion_pct = round(abs(top_detr) / abs(gap_detr_total) * 100, 1) if gap_detr_total else None
             desfase_pct = round(abs(gap_total_campos - gap_kpi) / abs(gap_kpi) * 100, 1) if gap_kpi else None
             # Extremos por producción REAL: 2 mayores + 2 menores ENTRE los campos que sí producen
             # (real>0) — para la tarjeta de un producto que NO va mal. d = (campo, dif, real, ppto).
@@ -2078,11 +2089,12 @@ def _fil_intermedios(c):
         difs = [((r[0] or "").strip(), float(r[1] or 0) - float(r[2] or 0),
                  float(r[1] or 0), float(r[2] or 0)) for r in grows if (r[1] or r[2])]
         gap_total = sum(d[1] for d in difs)
-        detr = sorted([d for d in difs if d[1] < 0], key=lambda x: x[1])[:3]
+        # [2026-08-31] Mismo corte a 5 que el bloque de _gap_campo: los dos alimentan el mismo panel.
+        detr = sorted([d for d in difs if d[1] < 0], key=lambda x: x[1])[:TOP_DETRACTORES]
         comp = sorted([d for d in difs if d[1] > 0], key=lambda x: -x[1])[:2]
-        top3 = sum(d[1] for d in detr)
+        top_detr = sum(d[1] for d in detr)
         gap_detr_total = sum(d[1] for d in difs if d[1] < 0)
-        concentracion_pct = round(abs(top3) / abs(gap_detr_total) * 100, 1) if gap_detr_total else None
+        concentracion_pct = round(abs(top_detr) / abs(gap_detr_total) * 100, 1) if gap_detr_total else None
         desfase_pct = round(abs(gap_total - gap_kpi) / abs(gap_kpi) * 100, 1) if gap_kpi else None
         return {
             "producto": producto, "gap_kpi": round(gap_kpi), "gap_total_campos": round(gap_total),
