@@ -53,6 +53,38 @@ _BOTTOM_PHRASE = ("LOS QUE MENOS", "POR DEBAJO", "QUEDARON CORTOS", "DE ABAJO")
 _TOP_GAP_TOK = ("SUPERARON", "SUPERO", "EXCEDIERON", "EXCEDENTE", "EXCEDIO", "SOBRECUMPLIERON")
 _TOP_GAP_PHRASE = ("POR ENCIMA",)
 
+# [2026-09-01] DISTRIBUCIÓN — familia ORTOGONAL al superlativo. Una distribución no pide el
+# extremo, pide el reparto: no tiene dirección (las lista todas), así que NO entra en
+# _SUPERLATIVO ni en _BOTTOM_TOK. Cae en el default metrica=real · direccion=top, que es
+# exactamente el panel de participación que el motor ya sabe pintar (dona + % individual +
+# cola declarada) — ver ranking.py:303 y el bullet _b_concentracion.
+# Medido: 13 de 25 formas de pedir la distribución no activaban el ranking (ver
+# vocabulario_distribucion_error.md).
+# ⚠️ NO incluir PESA/PESAN: 'QUE CAMPOS PESAN' es patrón de ANALIZAR (patrones_grupo.yaml:206)
+# y la exclusión de :66-71 es una decisión explícita del usuario del 2026-08-24. Se respeta.
+# ⚠️ PORCENTAJE / PORCENTUAL / PORCENTUALMENTE / % son 4 TOKENS distintos (match exacto,
+# AF-3.7): hay que listarlos todos. `_PUNCT` (:68) no incluye '%', así que "en %," tokeniza
+# a '%' limpio.
+# ⚠️ DESGLOS*: cobertura PARCIAL a propósito. "desglósame la producción por campo" llega aquí;
+# "desglósame el activo Castilla por campo" lo atrapa antes jerarquizar (patrones_grupo.yaml:93)
+# y "desglose por campo" del gap lo usa el panel de Analizar (respuesta_analizar.py:57).
+_DISTRIBUCION = ("DISTRIBUYE", "DISTRIBUYEN", "DISTRIBUCION", "DISTRIBUIDA", "DISTRIBUIDO",
+                 "REPARTE", "REPARTEN", "REPARTO", "REPARTEME", "REPARTIDA", "REPARTIDO",
+                 "PARTICIPACION", "PARTICIPA", "PARTICIPAN",
+                 "PORCENTAJE", "PORCENTUAL", "PORCENTUALMENTE", "%",
+                 "CONTRIBUCION", "CONTRIBUYE", "CONTRIBUYEN",
+                 "PROPORCION", "FRACCION", "SHARE",
+                 "DESGLOSE", "DESGLOSA", "DESGLOSAME",
+                 "REPRESENTA", "REPRESENTAN")
+
+# [2026-09-01] DOMINANCIA — verbos de liderazgo. SÍ son superlativos semánticos (piden el
+# extremo), pero se agrupan aparte para que el diff diga de dónde salió cada palabra.
+# ⚠️ NO incluir DOMINAS: 'QUE TEMAS ... DOMINAS' es el detector de capacidades
+# (capacidades.py:57), el primer guard del motor. DOMINA/DOMINAN no colisionan (aquel exige
+# 'QUE TEMAS' a ≤24 chars).
+_DOMINANCIA = ("ENCABEZA", "ENCABEZAN", "LIDERA", "LIDERAN", "LIDERO", "LIDERARON",
+               "PUNTEROS", "PUNTERAS", "DOMINA", "DOMINAN")
+
 # Métrica gap. 🔑 SIN "META": 'META\b' es patrón del grupo ANALIZAR y gana por precedencia_colision
 # (analizar > cuantificar) → una pregunta con "meta" nunca llega aquí. Incluirla crearía la ilusión
 # de soporte. Ver §11 · D6.
@@ -100,7 +132,9 @@ def detectar(texto: str):
     # comparación entre entidades cuando van con un sustantivo de nivel — sin esto, "qué campos
     # superaron el presupuesto" (caso exigido en V-DETECT/§8 del plan) daba None.
     if not (any(s in toks for s in _SUPERLATIVO) or any(s in toks for s in _BOTTOM_TOK)
-            or any(s in toks for s in _TOP_GAP_TOK) or "TOP" in t or "RANKING" in t):
+            or any(s in toks for s in _TOP_GAP_TOK)
+            or any(s in toks for s in _DISTRIBUCION) or any(s in toks for s in _DOMINANCIA)
+            or "TOP" in t or "RANKING" in t):
         return None
     nivel = next((_NIVEL_TOK[k] for k in _NIVEL_TOK if k in toks), None)
     if nivel is None:

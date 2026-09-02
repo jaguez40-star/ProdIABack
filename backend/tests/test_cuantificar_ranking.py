@@ -251,3 +251,63 @@ def test_v2_11_glosa_corchetes_solo_en_gap():
     gap = RK.formatear_cuerpo(_res(items=items, metrica="gap", concentracion_pct=None))
     assert "entre corchetes" not in real
     assert "entre corchetes" in gap
+
+
+# --- V-DETECT · DISTRIBUCIÓN y DOMINANCIA (2026-09-01) -------------------------------------
+
+def test_distribucion_activa_el_ranking():
+    """El caso real del usuario: no dice ningún superlativo, pide el reparto."""
+    r = RK.detectar("como se distribuye la produccion de crudo, %, entre los campos productores")
+    assert r is not None
+    assert r["nivel_ranking"] == "campo"
+    assert r["metrica"] == "real" and r["direccion"] == "top"
+    assert r["top_n"] == 5
+
+
+def test_distribucion_porcentualmente():
+    r = RK.detectar("como se distribuye la produccion de crudo, porcentualmente, entre los campos")
+    assert r is not None and r["direccion"] == "top"
+
+
+def test_distribucion_participacion():
+    r = RK.detectar("que participacion tiene cada campo en la produccion total de crudo")
+    assert r is not None and r["nivel_ranking"] == "campo"
+
+
+def test_distribucion_share_y_fraccion():
+    assert RK.detectar("dame el share de cada campo sobre la produccion de crudo") is not None
+    assert RK.detectar("que fraccion del crudo produce cada campo") is not None
+
+
+def test_dominancia_verbos_de_liderazgo():
+    """encabezan / lidero / punteros: superlativos semánticos que faltaban."""
+    assert RK.detectar("que campos encabezan la produccion de aceite en agosto") is not None
+    assert RK.detectar("que campo lidero la produccion durante agosto") is not None
+    assert RK.detectar("muestrame los campos punteros en crudo para agosto") is not None
+
+
+def test_distribucion_sigue_exigiendo_nivel():
+    """El filtro 2 no se relaja: sin CAMPO/ACTIVO no es un ranking (H1 del plan)."""
+    assert RK.detectar("como se distribuye la produccion de crudo") is None
+
+
+def test_pesa_sigue_siendo_de_analizar():
+    """🔒 REGRESIÓN: PESA/PESAN NO entran en _DISTRIBUCION — patrones_grupo.yaml:206 y la
+    exclusión de :66-71 son una decisión del usuario del 2026-08-24 (ver H3 del plan)."""
+    assert RK.detectar("que campos pesan en el gap") is None
+
+
+def test_no_es_ranking_sin_ninguna_senal():
+    """Regresión del gate: sin superlativo NI distribución NI dominancia, sigue None."""
+    assert RK.detectar("cuanto crudo produjo Rubiales") is None
+
+
+def test_distribucion_con_entidad_es_deteccion_y_la_guarda_decide():
+    """H9 del plan: «¿qué porcentaje aporta el campo Castilla?» AHORA es detectada como
+    ranking (PORCENTAJE + CAMPO). La declinación honesta la pone la guarda (3) del
+    dispatcher (respuesta_cuantificar.py:228-234), que corre después y consulta la BD —
+    por eso aquí SOLO se fija que detectar() devuelve algo (el cambio de comportamiento
+    es deliberado, no accidental). El caso catastrófico —responder el ranking global a
+    quien preguntó por Castilla— lo impide esa guarda, no este módulo."""
+    r = RK.detectar("que porcentaje del crudo aporta el campo Castilla")
+    assert r is not None and r["nivel_ranking"] == "campo"
