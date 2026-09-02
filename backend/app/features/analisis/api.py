@@ -1781,7 +1781,7 @@ def ejecutivo(entidad: str | None = Query(None), segmento: str = Query("ecp"),
         # para "producción del mes vs promedio del año" (arriba/abajo) en tarjetas sin ritmo diario
         # fiable (p.ej. BLANCOS, cuyo diario no reconcilia). NO se usa para Crudo/Gas.
         hist_anio = {}
-        _h = {}
+        _h = {}                                     # {prod: {mes:int -> vol:float}}
         for _nom, _mm, _v in c.execute(_b(f"""
                 SELECT tp.nombre, EXTRACT(month FROM m.fecha)::int, SUM(m.volumen)
                 FROM core.fact_produccion_mes_ecp m
@@ -1792,10 +1792,10 @@ def ejecutivo(entidad: str | None = Query(None), segmento: str = Query("ecp"),
                 GROUP BY 1, 2"""), {**base, "hy": y, "hmo": mo}).all():
             _v = float(_v or 0)
             if _v > 0:
-                _h.setdefault(_nom, []).append(_v)
+                _h.setdefault(_nom, {})[int(_mm)] = _v
         for _nom, _vals in _h.items():
             if _vals:
-                hist_anio[_nom] = round(sum(_vals) / len(_vals))
+                hist_anio[_nom] = round(sum(_vals.values()) / len(_vals))
 
         # Gap RECONCILIADO por producto rezagado (pct<100): descompone por campo y compara Σcampos
         # contra el gap del KPI (H2). concentracion_pct usa la MISMA base (Σcampos) que la descomposición.
@@ -1996,6 +1996,18 @@ def ejecutivo(entidad: str | None = Query(None), segmento: str = Query("ecp"),
             "pace_crudo": pace, "flags": flags, "secciones": secciones,
             "focos": _focos(titular, gap_lag, valle, eventos, _tarj, extremos_prod),
             "sin_foco": _sin_foco(titular, gap_full, valle),
+            # [2026-09-01] Comparativo vs mes anterior para el bloque de iniciativa del chat
+            # (consulta_v2/analizar). Sale del desglose por mes que esta misma función ya
+            # consultaba para hist_anio y descartaba. None en enero (la query filtra por año:
+            # no se cruza a diciembre del año anterior — nunca inventar). `actual` es la fila
+            # mensual REAL del mes en curso (proyección de cierre), la misma base que hist_prom.
+            "comparativo_mes": ({
+                "mes_anterior": f"{MESES_ES[mo - 1].lower()} {y}",
+                "por_producto": {
+                    t["producto"]: {"actual": t["real"], "anterior": _h.get(t["producto"], {}).get(mo - 1)}
+                    for t in titular
+                },
+            } if mo > 1 else None),
         }
 
 

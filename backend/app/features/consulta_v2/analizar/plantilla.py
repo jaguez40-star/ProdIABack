@@ -122,6 +122,82 @@ def _causas_bloque(impacto, split, prod) -> list:
     return lineas
 
 
+def _iniciativa_bloque(d, ya_dicho=None) -> list:
+    """«Ojo con esto»: hallazgos que el motor ya calculó y la pregunta no pidió. [] si no hay
+    nada — regla N5, como _dl_bloque/_causas_bloque. SOLO AFIRMA: ninguna línea termina en «?»
+    (el cierre es un contrato con el drill de maquina_q; ofrecer algo que el motor no sabe
+    responder es el fallo histórico documentado en respuesta_analizar.py:49-54).
+    Vocabulario vigilado: jamás «faltante»/«déficit» (REGLA CERO, test_analizar.py:172) ni los
+    tokens HECHO/CAUSA/ACCIÓN/DELTA/Pediste/CONTEXTO ·/ACCIÓN · que los tests prohíben.
+    `ya_dicho`: set con lo que el cuerpo ya narró — {"valle_fechas"} y/o {"conc:CRUDO", ...} —
+    para no repetir (el HECHO de crudo ya dice las fechas del valle; _dl_bloque ya dice la
+    concentración). try/except integral: el contrato de cero riesgo es que un fallo aquí sea
+    indistinguible de «sin hallazgos»."""
+    try:
+        ya = ya_dicho or set()
+        flags = d.get("flags") or []
+        lineas = []
+
+        # 1) producto crítico (severidad alta — siempre primero)
+        for f in flags:
+            if isinstance(f, dict) and f.get("tipo") == "producto_critico" and f.get("pct") is not None:
+                pl = _PROD_L.get(f.get("producto"), str(f.get("producto") or "").lower())
+                lineas.append(f"  · {pl.capitalize()} está en zona crítica: {f['pct']}% del presupuesto, por debajo del 60%.")
+
+        # 2) comparativo vs mes anterior (solo variaciones >= 5%; sin PPTO de por medio)
+        cm = d.get("comparativo_mes") or {}
+        mes_ant = cm.get("mes_anterior")
+        for p, v in (cm.get("por_producto") or {}).items():
+            act, ant = (v or {}).get("actual"), (v or {}).get("anterior")
+            if not (mes_ant and act and ant):
+                continue
+            pct = round((act / ant - 1) * 100, 1)
+            if abs(pct) < 5.0:
+                continue
+            pl = _PROD_L.get(p, p.lower())
+            verbo = "subió" if pct > 0 else "bajó"
+            u = _UNIDAD.get(p, "bbl")
+            lineas.append(f"  · Frente a {mes_ant}, {pl} {verbo} {abs(pct)}% "
+                          f"({_fmt(act, p)} vs {_fmt(ant, p)} {u}).")
+
+        # 3) valle — el estado es lo crítico (¿sigue abierto?); si el cuerpo ya dijo las
+        #    fechas (apertura de CRUDO rezagado), solo se emite el estado.
+        for f in flags:
+            if isinstance(f, dict) and f.get("tipo") == "valle_activo":
+                if "valle_fechas" in ya:
+                    lineas.append("  · Ese valle sigue abierto a la fecha de corte — todavía no se recupera."
+                                  if f.get("activo") else
+                                  "  · Ese valle ya se recuperó.")
+                else:
+                    rng = f"del {_dia_mes(f.get('desde'))} al {_dia_mes(f.get('hasta'))}"
+                    lineas.append(f"  · El valle de crudo {rng} sigue abierto a la fecha de corte — todavía no se recupera."
+                                  if f.get("activo") else
+                                  f"  · El valle de crudo {rng} ya se recuperó.")
+
+        # 4) ritmo de cierre exigente
+        for f in flags:
+            if isinstance(f, dict) and f.get("tipo") == "pace_exigente" and f.get("requerido_dia"):
+                lineas.append(f"  · Para cerrar crudo en presupuesto se necesitan {_fmt(f['requerido_dia'], 'CRUDO')} bbl/día "
+                              f"en los {f.get('restantes')} días restantes — un {f.get('delta_pct')}% sobre el promedio "
+                              f"actual de {_fmt(f.get('promedio_dia'), 'CRUDO')} bbl/día.")
+
+        # 5) brecha concentrada — solo si _dl_bloque NO la dijo ya para ese producto
+        for f in flags:
+            if isinstance(f, dict) and f.get("tipo") == "gap_concentrado":
+                if f"conc:{f.get('producto')}" in ya:
+                    continue
+                pl = _PROD_L.get(f.get("producto"), str(f.get("producto") or "").lower())
+                campos = ", ".join(f.get("campos") or [])
+                sufijo = f": {campos}" if campos else ""
+                lineas.append(f"  · La brecha de {pl} está concentrada: ~{f.get('concentracion_pct')}% en pocos campos{sufijo}.")
+
+        if not lineas:
+            return []
+        return ["⟦Ojo con esto⟧"] + lineas[:3]      # tope duro: 3 hallazgos, por severidad
+    except Exception:
+        return []                                     # cero riesgo: fallo == sin hallazgos
+
+
 def causal(d, entidad, producto=None, split=None, impacto=None) -> str:
     """Narrativa causal SIN rótulos de grupo (decisión del usuario, 2026-08-13): «dónde está el
     faltante» (campo por campo, en bbl) + «por qué» (causas históricas, SOLO %). Alcance = entidad
@@ -157,6 +233,10 @@ def causal(d, entidad, producto=None, split=None, impacto=None) -> str:
             ctx_line, _ = _split_lineas(split, producto)   # contexto (sin cláusula: aquí no hay ACCIÓN)
             if ctx_line:
                 lineas.append(ctx_line)
+            ini = _iniciativa_bloque(d)
+            if ini:
+                lineas.append("")
+                lineas.extend(ini)
             return "\n".join(lineas)
 
     # --- REGLA CERO: sin rezago, se DECLARA (no se inventa) — RA-4: ramificar por "hay meta o no" ---
@@ -174,6 +254,10 @@ def causal(d, entidad, producto=None, split=None, impacto=None) -> str:
         else:
             lineas.append("HECHO: ningún producto tiene meta definida en el periodo — no hay "
                           "cumplimiento que evaluar ni rezago que explicar.")
+        ini = _iniciativa_bloque(d)
+        if ini:
+            lineas.append("")
+            lineas.extend(ini)
         return "\n".join(lineas)
 
     # --- Con rezago (2026-08-13, texto acordado con el usuario, SIN rótulos de grupo, SIN ACCIÓN,
@@ -209,6 +293,17 @@ def causal(d, entidad, producto=None, split=None, impacto=None) -> str:
         bloques_prod.append("\n".join(bloque))
 
     lineas.append("\n\n".join(bloques_prod))
+
+    ya = set()
+    if d.get("valle") and any(t["producto"] == "CRUDO" for t in rez):
+        ya.add("valle_fechas")            # la apertura de CRUDO ya dijo «con un valle del X al Y»
+    for t in rez:
+        if gap.get(t["producto"], {}).get("detractores"):
+            ya.add(f"conc:{t['producto']}")   # _dl_bloque ya dijo la concentración
+    ini = _iniciativa_bloque(d, ya)
+    if ini:
+        lineas.append("")
+        lineas.extend(ini)
     return "\n".join(lineas).rstrip()
 
 

@@ -66,7 +66,16 @@ def _fake_con_rezago(entidad=None, segmento="ecp", nivel=None, periodo=None, pul
         "valle": {"desde": "2026-05-06", "hasta": "2026-05-12"},
         "pace_crudo": {"mtd": 4000, "dias": 17, "restantes": 14, "promedio_dia": 235,
                        "requerido_dia": 428, "delta_pct": 82.0},
-        "flags": [], "secciones": None, "focos": [], "sin_foco": False,
+        "flags": [
+            {"tipo": "valle_activo", "severidad": "media", "activo": True,
+             "desde": "2026-05-06", "hasta": "2026-05-12"},
+            {"tipo": "pace_exigente", "severidad": "media", "delta_pct": 82.0,
+             "requerido_dia": 428, "promedio_dia": 235, "restantes": 14},
+        ],
+        "comparativo_mes": {"mes_anterior": "abril 2026", "por_producto": {
+            "CRUDO": {"actual": 8000.0, "anterior": 9000.0},
+            "GAS": {"actual": 5000.0, "anterior": 4950.0}}},
+        "secciones": None, "focos": [], "sin_foco": False,
     }
 
 
@@ -394,3 +403,94 @@ def test_responder_causal_inyecta_split():
                         _diferidas_fn=_fake_impacto_vacio)
     assert "⟦Por qué⟧" in out
     assert "no planeados" in out
+
+
+# ---------------- iniciativa (⟦Ojo con esto⟧, 2026-09-01) ----------------
+
+def _fake_flags_todos():
+    d = _fake_con_rezago()
+    d["flags"] = [
+        {"tipo": "producto_critico", "severidad": "alta", "producto": "CRUDO", "pct": 55.0},
+        {"tipo": "gap_concentrado", "severidad": "media", "producto": "CRUDO",
+         "concentracion_pct": 75.0, "campos": ["CAJUA", "CPO-09"]},
+        {"tipo": "valle_activo", "severidad": "media", "activo": True,
+         "desde": "2026-05-06", "hasta": "2026-05-12"},
+        {"tipo": "pace_exigente", "severidad": "media", "delta_pct": 82.0,
+         "requerido_dia": 428, "promedio_dia": 235, "restantes": 14},
+    ]
+    return d
+
+
+def test_iniciativa_valle_activo_dice_estado():
+    out = _plantilla.causal(_fake_con_rezago(), None, "CRUDO", _fake_split_vacio(), _fake_impacto_vacio())
+    assert "⟦Ojo con esto⟧" in out
+    assert "sigue abierto" in out
+    # dedupe: la apertura ya dijo las fechas; el bloque no las repite
+    assert out.count("6 de mayo") == 1
+
+
+def test_iniciativa_valle_recuperado():
+    d = _fake_con_rezago()
+    d["flags"][0]["activo"] = False
+    out = _plantilla.causal(d, None, "CRUDO", _fake_split_vacio(), _fake_impacto_vacio())
+    assert "ya se recuperó" in out and "sigue abierto" not in out
+
+
+def test_iniciativa_comparativo_mes_anterior():
+    out = _plantilla.causal(_fake_con_rezago(), None, "CRUDO", _fake_split_vacio(), _fake_impacto_vacio())
+    assert "abril 2026" in out and "bajó" in out          # 8000 vs 9000 = −11.1%
+    assert "subió" not in out                              # GAS varía 1% < umbral 5%: no se emite
+
+
+def test_iniciativa_regla_cero_emite_sin_contaminar():
+    # _fake_en_meta HEREDA los flags de _fake_con_rezago: la REGLA CERO recibe el bloque y
+    # el vocabulario sigue limpio. Complemento activo de test_regla_cero_no_inventa_rezago.
+    r = _ra.responder("¿por qué está corto Castilla?", entidad="CASTILLA",
+                      _ejecutivo_fn=lambda **k: _fake_en_meta(**k), _split_fn=_fake_split_vacio,
+                      _diferidas_fn=_fake_impacto_vacio)
+    assert "no hay rezago" in r.lower()
+    assert "faltante" not in r.lower() and "déficit" not in r.lower()
+    assert "⟦Ojo con esto⟧" in r
+
+
+def test_iniciativa_sin_material_no_emite():
+    d = _fake_con_rezago()
+    d["flags"] = []; d["comparativo_mes"] = None
+    out = _plantilla.causal(d, None, "CRUDO", _fake_split_vacio(), _fake_impacto_vacio())
+    assert "⟦Ojo con esto⟧" not in out
+
+
+def test_iniciativa_sin_tokens_prohibidos():
+    out = _plantilla.causal(_fake_flags_todos(), None, "CRUDO", _fake_split_vacio(), _fake_impacto_vacio())
+    ini = out[out.index("⟦Ojo con esto⟧"):]
+    for tok in ("HECHO", "CAUSA", "ACCIÓN", "DELTA", "Pediste", "Formación",
+                "COBERTURA PARCIAL", "CONTEXTO ·", "ACCIÓN ·", "histórico ene-2023"):
+        assert tok not in ini
+    for tok in ("faltante", "déficit"):
+        assert tok not in ini.lower()
+    assert "?" not in ini                                  # H6: el bloque solo afirma
+
+
+def test_iniciativa_tope_tres_lineas():
+    out = _plantilla.causal(_fake_flags_todos(), None, "CRUDO", _fake_split_vacio(), _fake_impacto_vacio())
+    ini = out[out.index("⟦Ojo con esto⟧"):]
+    assert sum(1 for l in ini.split("\n") if l.startswith("  · ")) <= 3
+
+
+def test_iniciativa_flags_malformados_no_rompen():
+    d = _fake_con_rezago()
+    d["flags"] = [{"tipo": "producto_critico"}, {"tipo": "desconocido_futuro"}, None, "basura"]
+    d["comparativo_mes"] = {"mes_anterior": "abril 2026", "por_producto": {"CRUDO": None}}
+    out = _plantilla.causal(d, None, "CRUDO", _fake_split_vacio(), _fake_impacto_vacio())
+    assert isinstance(out, str)                            # no lanza; degrada
+
+
+def test_iniciativa_solo_en_causal():
+    # "¿cómo vamos este mes?" -> sub_intencion "proyeccion" (mismo texto que
+    # test_sub_proyeccion_como_vamos). plantilla.proyeccion() nunca llama a
+    # _iniciativa_bloque — solo causal() lo hace — así que el bloque no debe aparecer.
+    assert _subrouter.sub_intencion("¿cómo vamos este mes?") == "proyeccion"
+    r = _ra.responder("¿cómo vamos este mes?", entidad=None,
+                      _ejecutivo_fn=lambda **k: _fake_con_rezago(**k), _split_fn=_fake_split_vacio,
+                      _diferidas_fn=_fake_impacto_vacio)
+    assert "⟦Ojo con esto⟧" not in r
