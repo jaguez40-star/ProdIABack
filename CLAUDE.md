@@ -185,6 +185,43 @@ se salta el LDAP.
   `multitab_shell.js`.
 - Suite de 502+ tests pasando, con 10 fallos preexistentes y ajenos documentados.
 
+### 🔴 Brecha prioritaria — jerarquía superior a campo (2026-09-01)
+
+**Es lo primero de la cola funcional.** Ver `jerarquias_sup_error.md` (raíz) para el detalle
+medido. Tres bugs, una causa raíz: **conviven tres catálogos de entidades y el resolutor de
+Cuantificar lee el más pobre** (`dim_fuente`, mientras el panel y el clasificador leen
+`core.map_campo_robustez`).
+
+| # | Síntoma | Alcance medido |
+|---|---|---|
+| 1 | Preguntar por una gerencia → «No reconocí «X» en el catálogo» | **20 de 24 gerencias**, 1 de 15 VPs |
+| 2 | «el activo CASTILLA» devuelve las cifras del **campo** CASTILLA | Todo nombre en dos niveles |
+| 3 | El universo de campos de una VP difiere entre catálogos | Sin impacto en el único caso medido |
+
+⚠️ **El bug 2 apremia más que el 1**: no falla, no avisa — responde otra cosa con seguridad.
+Misma familia que el bug del periodo ignorado. Un fallo ruidoso se detecta; este no.
+
+Es deuda registrada desde el 2026-08-02 (`plan_cuantificar_fase1:157` → «unificar en Fase 3 /
+R11») que nunca se saldó. **Antes de tocar el resolutor o añadir tipos de pregunta nuevos, leer
+ese documento**: cualquier trabajo sobre jerarquías se apoya en un catálogo incompleto.
+
+### 🟡 Brecha abierta — vocabulario de distribución (2026-09-01)
+
+Ver `vocabulario_distribucion_error.md` (raíz). El panel de **distribución porcentual por
+campo ya existe y está completo**, pero el gate de `cuantificar/ranking.py:102-107` exige un
+**superlativo** para activarse: **13 de 25 formas de pedirla fallan** (medido). "¿Cuáles campos
+tienen la MAYOR producción?" funciona; "¿cómo se DISTRIBUYE la producción, en %?" no.
+
+Al detector le faltan dos familias: **distribución** (participación, porcentaje, contribución,
+peso, share, fracción, reparto) y **dominancia** (encabezan, lideró, punteros).
+
+Arreglo aditivo y de bajo riesgo —tupla `_DISTRIBUCION` nueva, no meterlas en `_SUPERLATIVO`—,
+**independiente del orden 2→1→3 de las jerarquías**. ⚠️ Medir el golden (92 casos, gate ≥90%)
+antes y después: `DISTRIBUCIÓN`/`REPARTO` pueden robarle preguntas a Analizar.
+
+⚠️ Colateral sin abrir: **«mes pasado» no está soportado** (cero coincidencias en `slots.py`)
+→ responde el mes vigente en silencio.
+
 ### Deuda conocida (documentada, no bloqueante)
 
 - El `rank` de «Focos de atención» no ordena realmente por impacto.
@@ -488,6 +525,9 @@ conservan: son el registro de por qué el código es como es.
 
 ---
 
-*Ver `BITACORA.md` para el historial. Guía de arranque detallada en
+*Brechas abiertas: `jerarquias_sup_error.md` (jerarquía superior a campo, PRIORIDAD) y
+`vocabulario_distribucion_error.md` (el clasificador no entiende "distribución").
+
+Ver `BITACORA.md` para el historial. Guía de arranque detallada en
 `frontend\SETUP_LOCAL.md`. Postmortem de la migración en
 `frontend\POSTMORTEM_migracion_puertos_azure_20260826.md`.*
