@@ -21,6 +21,14 @@ def acumulado(resuelta: dict, dim_producto: str, _desempeno_fn=None) -> dict:
     anio, ultimo = d0["mes"]["anio"], d0["mes"]["mes"]
     total_real = total_ppto = 0.0
     meses, en_curso = [], None
+    # [2026-09-03 · CURVA-ACUMULADA] La SUMA CORRIDA, mes a mes. El bucle ya traía el valor
+    # mensual de cada mes y solo lo sumaba al total: aquí se conserva además el estado del
+    # acumulado en cada paso, que es exactamente la curva creciente que el panel dibuja.
+    # 🔑 Coste CERO: ni una consulta más. Es el mismo patrón de `comparativo_mes` (1-sep) —
+    #    el dato ya se calculaba y se descartaba.
+    # 🔑 HE4: solo entran los meses CERRADOS. El mes en curso queda fuera de la serie igual que
+    #    queda fuera del total; meterlo aquí contradiría la regla que gobierna todo N2.
+    serie_acum = []
     for m in range(1, ultimo + 1):
         dm = fn(entidad=resuelta["valor"], segmento="ecp", nivel=resuelta.get("nivel"), periodo=_MESES[m])
         if not dm.get("encontrada") or dm.get("sin_datos") or dm.get("sin_cierre"):
@@ -32,13 +40,21 @@ def acumulado(resuelta: dict, dim_producto: str, _desempeno_fn=None) -> dict:
             total_real += fila["real"]
             total_ppto += (fila["ppto"] or 0)
             meses.append(_MESES[m])
+            serie_acum.append({
+                "mes": _MESES[m][:3].capitalize(),   # "Ene" — mismo formato corto que ritmo_mensual
+                "num": m,
+                "real_acum": total_real,
+                # `ppto_acum` es None si NINGÚN mes trajo presupuesto: dibujar una curva de ceros
+                # afirmaría que el PPTO es cero, que es distinto de "no hay PPTO cargado".
+                "ppto_acum": (total_ppto if total_ppto else None),
+            })
         else:
             en_curso = {"nombre": _MESES[m], "real": fila["real"]}   # proyección; NO se suma (HE4)
     if not meses:
         return {"aplica": False,
                 "texto": f"«{resuelta['valor']}» aún no tiene meses cerrados en {anio} para acumular."}
     return {"aplica": True, "real": total_real, "ppto": total_ppto, "meses": meses,
-            "en_curso": en_curso, "anio": anio}
+            "en_curso": en_curso, "anio": anio, "serie_acum": serie_acum}
 
 
 def _serie_puntos(resuelta: dict, dim_producto: str, fn):

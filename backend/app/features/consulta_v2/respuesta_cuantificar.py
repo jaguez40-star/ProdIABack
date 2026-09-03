@@ -48,9 +48,14 @@ _MESES_PANEL = ["", "enero", "febrero", "marzo", "abril", "mayo", "junio", "juli
 _PROD_DIM = {"crudo": "CRUDO", "gas": "GAS", "blancos": "BLANCOS"}
 # [2026-08-26 · QV2-SERIE-DIA] N1DSER usa el MISMO panel que el grano día: la curva del mes ya la
 # dibujaba entera y solo marcaba un punto encima. Aquí no hay punto que marcar — es la curva sola.
+# [2026-09-03 · CURVA-ACUMULADA] N2 pasa de `cuant_kpi` a `cuant_acum`: el MISMO gauge de
+# siempre MÁS la curva creciente del acumulado. No es un panel distinto, es el de siempre con
+# el gráfico que le faltaba — por eso `cuant_acum` construye el KPI y le añade el host.
+# N1 sigue en `cuant_kpi` (su curva diaria la pinta otro camino).
 _PANEL_TIPO = {"N3": "cuant_serie", "N4": "cuant_var",
               "N1D": "cuant_dia_panel", "N1DSEL": "cuant_dia_panel",
-              "N1DSER": "cuant_dia_panel"}   # N1/N2 -> "cuant_kpi" (Fase 3)
+              "N1DSER": "cuant_dia_panel",
+              "N2": "cuant_acum"}            # N1 -> "cuant_kpi" (Fase 3)
 _CIERRE_RANK = "Si quieres, te lo doy por otro producto o cambiando el orden."
 # [2026-08-25] Grano día: NO es pregunta sí/no (regla H1) — un "sí" caería en el drill _AFIRM de
 # maquina_q._continuacion y devolvería un acumulado en vez de lo ofrecido aquí.
@@ -174,6 +179,13 @@ def _panel_datos(res: dict) -> dict:
         if nivel == "N2":
             d["periodo_label"] = res["periodo_label"]
             d["meses_cerrados"] = res["meses_cerrados"]
+            # [2026-09-03 · CURVA-ACUMULADA] La curva viaja EN EL PAYLOAD del chat: el panel
+            # `cuant_acum` se pinta SIN fetch (multitab_shell.js:4105), igual que N3/N4. Por eso
+            # este plan no toca el proxy Flask ni sus dos capas de caché.
+            d["serie_acum"] = res.get("serie_acum") or []
+            # [v2/H15] Sin fallback: `ejecutar_n2` ya lo propaga (§3.2). El fallback de la v1
+            # (`res["mes"]["anio"]`) era humo — N2 no tiene clave `mes` por diseño (HE6).
+            d["anio"] = res.get("anio")
         else:                               # N1: referencia seleccionable (Fase 4)
             d["mes"] = res["mes"]
             d["referencia"] = res.get("referencia", "PPTO")

@@ -204,6 +204,14 @@ def ejecutar_n2(resuelta: dict, slots: dict, _desempeno_fn=None) -> dict:
         "resultado": {"valor": real}, "referencia_valor": ppto,
         "cumplimiento_pct": cumpl, "estado": estado,
         "periodo_label": periodo_label, "meses_cerrados": len(ms), "en_curso": ac.get("en_curso"),
+        # [2026-09-03 · CURVA-ACUMULADA] La curva creciente del acumulado. Aditiva: quien no la
+        # lea (la burbuja de texto, validador.formatear_cuerpo) sigue funcionando igual.
+        # 🔑 `anio` se propaga EXPLÍCITAMENTE (v2/H15). `niveles.acumulado` lo devuelve desde
+        #    siempre pero este contrato no lo llevaba, y N2 NO tiene la clave `mes` (HE6 lo
+        #    prohíbe: nada de meses sintéticos), así que el panel no tenía de dónde sacar el año
+        #    para el título del gráfico y salía un hueco.
+        "anio": ac.get("anio"),
+        "serie_acum": ac.get("serie_acum") or [],
         "huella": {"registros": len(ms), "es_proyeccion": False},
         "defaults_asumidos": slots.get("defaults_asumidos", []), "avisos": avisos,
         "zoom": resuelta.get("zoom", []),
