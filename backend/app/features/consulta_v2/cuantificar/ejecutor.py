@@ -138,6 +138,13 @@ def ejecutar_n1(resuelta: dict, slots: dict, _desempeno_fn=None, _escenario_fn=N
     avisos = []
     if slots.get("descargo"):                                   # AF5: blancos-mes = confianza media
         avisos.append(slots["descargo"])
+    # [2026-09-03 · MTD] «en lo que va del mes» sin decir CUÁL: el motor elige el del techo y lo
+    # declara. Antes esta forma caía en N2 y devolvía el acumulado del AÑO sin avisar de nada.
+    # El texto dice qué mes es y hasta dónde llega el dato — el usuario no tiene que deducirlo.
+    if slots.get("mtd"):
+        avisos.append(f"«En lo que va del mes» = {mes['nombre']} {mes['anio']}, con "
+                      f"{mes['dias_con_data']} de {mes['dias_del_mes']} días reportados. "
+                      f"Para el acumulado del AÑO, pregunta por el acumulado del año.")
     if ref != "PPTO" and not ref_valor:                       # AF-4.5: sin referencia registrada
         avisos.append(f"No hay {ref_label} registrado para {mes['nombre']} {mes['anio']}; muestro lo producido.")
     for x in (d.get("campos_sin_meta") or []):                  # AF4: aviso por producto/unidad

@@ -27,6 +27,27 @@ _ACUM_KW_DEBIL = ("EN EL ANO", "DEL ANO")
 _ACUM_KW_FUERTE = ("ACUMULADO", "ACUMULADA", "EN LO QUE VA", "YTD", "HASTA AHORA", "EN TOTAL", "TOTAL DEL ANO")
 _ACUM_KW = _ACUM_KW_FUERTE + _ACUM_KW_DEBIL   # unión — la usa _nivel_temporal, sin distinguir origen
 
+# [2026-09-03 · MTD] «en lo que va DEL MES» ≠ «en lo que va DEL AÑO». Las dos casan con la misma
+# keyword fuerte ("EN LO QUE VA", :27) y hasta ahora las dos caían en N2 — que acumula SIEMPRE el
+# AÑO, de enero al último mes cerrado. Preguntabas por el mes en curso y te respondían siete meses,
+# sin un solo aviso: el fallo silencioso de §6, el que no falla sino que responde otra cosa.
+#
+# 🔑 La cifra del mes en curso YA existe: es exactamente lo que N1 devuelve para el mes del techo
+#    («6.738.232 bbl · proyección · 30/31 días»). El hueco era de ENRUTADO, no de cálculo — por eso
+#    esto es una GUARDA que desvía a N1, y no un nivel nuevo.
+# 🔑 Exige la palabra MES. «en lo que va del año» sigue yendo a N2 (golden: cuantificar_golden.yaml
+#    trae ese caso); una guarda sin esa exigencia se lo robaría.
+# 🔑 Es ADITIVA sobre `_ACUM_KW`: quitar "EN LO QUE VA" de las keywords habría roto el golden.
+# 🔑 Cubre de paso «el acumulado DEL MES DE JULIO», que hoy responde el acumulado del AÑO: con la
+#    guarda cae a N1 y `_periodo_texto` aterriza julio. Mismo bug, misma familia.
+_RX_MTD = re.compile(
+    r"\bMTD\b"
+    r"|\b(?:EN\s+LO\s+QUE\s+VA|EN\s+LO\s+CORRIDO|LO\s+QUE\s+LLEVAMOS|LO\s+QUE\s+VAMOS)"
+    r"\s+(?:DEL?\s+)?(?:ESTE\s+|EL\s+)?MES\b"
+    r"|\b(?:ACUMULAD[OA]|TOTAL)\s+(?:DEL?\s+)?(?:ESTE\s+|EL\s+)?MES\b"
+    r"|\bACUMULAD[OA]\s+MENSUAL\b"
+)
+
 # Fase 3 — N3 (serie) y N4 (variación). AF-3.7: TOKEN para palabras sueltas (evita "BAJO"∈"trabajo",
 # "VARIO"∈"varios"); FRASE (substring) para multi-palabra. Sin bare "MES"/"MENSUAL" (pisarían N1).
 _VAR_WORDS = {"VARIACION", "VARIO", "VARIARON", "CAMBIO", "CAMBIARON",
@@ -377,6 +398,11 @@ def _nivel_temporal(texto: str) -> str:
         return "N4"
     if _tiene(t, _SERIE_WORDS, _SERIE_PHRASES):
         return "N3"
+    # [2026-09-03 · MTD] La guarda del MES va JUSTO ANTES de N2 y no antes: «la evolución mes a mes
+    # del acumulado» debe seguir siendo N3, y «cómo varió el acumulado del mes» N4. Adelantarla les
+    # robaría preguntas que hoy resuelven bien.
+    if _RX_MTD.search(t):
+        return "N1"
     if any(k in t for k in _ACUM_KW):
         return "N2"
     return "N1"
@@ -610,5 +636,10 @@ def extraer_slots(texto: str, entidad_valor: str | None = None, techo=None) -> d
         "dia": dia,
         "serie_dia": sdia,
         "ventana": ventana,
+        # [2026-09-03 · MTD] Solo cuando el usuario pidió el acumulado DEL MES y NO nombró cuál:
+        # ahí el motor elige el mes por él (el del techo) y tiene que decirlo. Si nombró el mes
+        # («el acumulado del mes de julio»), el rótulo del KPI ya dice «Julio 2026» y un aviso
+        # sobraría. Lo consume `ejecutar_n1`.
+        "mtd": bool(_RX_MTD.search(norm(texto or ""))) and per is None and nivel == "N1",
         "defaults_asumidos": defaults,
     }
