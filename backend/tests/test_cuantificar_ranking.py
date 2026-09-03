@@ -388,3 +388,52 @@ def test_campos_de_activo_vacio_o_none():
     """Puro, sin BD: guarda de entrada."""
     assert RK.campos_de_activo("") == set()
     assert RK.campos_de_activo(None) == set()
+
+
+# --- V-DETECT · el CONTENEDOR no decide el top_n (2026-09-03) -------------------------------
+
+def test_contenedor_singular_no_colapsa_el_ranking():
+    """🔴 EL BUG (medido en Pruebas 2026-09-03): «¿cuáles CAMPOS del ACTIVO Apiay producen
+    más crudo?» daba top_n=1 y el chat respondía «APIAY 279.825 bbl» —una cifra única— en
+    vez del panel de campos. El ACTIVO singular es el CONTENEDOR del scope, no lo que se
+    cuenta."""
+    r = RK.detectar("cuales campos del activo APIAY producen mas crudo")
+    assert r is not None
+    assert r["nivel_ranking"] == "campo"
+    assert r["top_n"] == 5
+
+
+def test_contenedor_singular_otras_formas():
+    """Las otras formas medidas que fallaban, mismo patrón (incluye «ranking de campos del
+    activo», descubierta en la 2ª pasada del plan)."""
+    a = RK.detectar("cuales son los campos del activo Castilla con mayor produccion")
+    b = RK.detectar("que campos del activo APIAY tienen mas crudo")
+    c = RK.detectar("ranking de campos del activo castilla")
+    assert a is not None and a["top_n"] == 5
+    assert b is not None and b["top_n"] == 5
+    assert c is not None and c["top_n"] == 5
+
+
+def test_ranking_de_activos_plural_da_5():
+    """🔒 REGRESIÓN complementaria: activos en plural, sin contenedor -> 5."""
+    r = RK.detectar("los activos con mayor produccion")
+    assert r is not None and r["nivel_ranking"] == "activo" and r["top_n"] == 5
+
+
+def test_singular_real_dentro_de_un_activo_sigue_dando_1():
+    """🔒 REGRESIÓN, el caso fino: aquí el singular SÍ es real —se pide UN campo dentro de un
+    activo— y debe seguir dando 1. Es el guardián de que la corrección no se pasó de ancho."""
+    r = RK.detectar("que campo del activo Castilla produce mas crudo")
+    assert r is not None and r["nivel_ranking"] == "campo" and r["top_n"] == 1
+
+
+def test_ranking_de_activos_singular_sigue_dando_1():
+    """🔒 REGRESIÓN: cuando lo que se rankea SON activos, el ACTIVO singular sí manda."""
+    r = RK.detectar("cual es el activo que mas crudo produce")
+    assert r is not None and r["nivel_ranking"] == "activo" and r["top_n"] == 1
+
+
+def test_top_n_explicito_gana_sobre_el_contenedor():
+    """🔒 Un número escrito por el usuario manda sobre toda heurística."""
+    r = RK.detectar("top 3 campos del activo APIAY")
+    assert r is not None and r["top_n"] == 3

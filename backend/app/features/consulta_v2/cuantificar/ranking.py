@@ -164,8 +164,19 @@ def detectar(texto: str):
         # cuando la señal es un SUPERLATIVO ("¿qué campo produce MÁS crudo?" -> 1).
         top_n = 5
     else:
-        singular = (("CAMPO" in toks and "CAMPOS" not in toks)
-                    or ("ACTIVO" in toks and "ACTIVOS" not in toks))
+        # [2026-09-03] MANDA EL NIVEL QUE SE RANKEA, no cualquier sustantivo de nivel presente.
+        # Medido en Pruebas: «¿cuáles CAMPOS del ACTIVO Apiay producen más crudo?» daba top_n=1
+        # —el `or` leía el ACTIVO singular como si se pidiera UN activo— y el chat respondía una
+        # cifra única en vez del panel. Pero ahí «activo» es el CONTENEDOR del scope, no lo que
+        # se cuenta: `nivel` (ya resuelto en :139) dice qué se rankea, y solo ese sustantivo
+        # decide el singular. Es la misma familia del bug de «cada campo» (mismo día), por el
+        # otro operando del `or`; se corrige en la raíz en vez de añadir otra excepción.
+        # 🔑 Sigue dando 1 en el singular REAL: «¿qué campo del activo Castilla produce más?»
+        # rankea campos y dice CAMPO en singular -> 1. Verificado en 8 casos.
+        if nivel == "activo":
+            singular = "ACTIVO" in toks and "ACTIVOS" not in toks
+        else:
+            singular = "CAMPO" in toks and "CAMPOS" not in toks
         top_n = 1 if singular else 5
 
     producto = next((_PROD_TOK[k] for k in _PROD_TOK if k in toks), "crudo")
