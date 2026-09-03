@@ -311,3 +311,28 @@ def test_distribucion_con_entidad_es_deteccion_y_la_guarda_decide():
     quien preguntó por Castilla— lo impide esa guarda, no este módulo."""
     r = RK.detectar("que porcentaje del crudo aporta el campo Castilla")
     assert r is not None and r["nivel_ranking"] == "campo"
+
+
+# --- V-DETECT · top_n en distribución (fix 2026-09-03, medido en Pruebas) -------------------
+
+def test_cada_campo_singular_no_colapsa_a_top_1():
+    """🔒 REGRESIÓN del bug medido en Pruebas el 2026-09-03: «cada CAMPO» es singular
+    gramatical con intención de TODOS. La heurística `singular -> top_n=1` (pensada para
+    «¿qué campo produce MÁS crudo?») lo colapsaba a 1 y el redactor imprimía el absurdo
+    «1 de 128 campos genera el 13,7%». Una distribución nunca pide un solo elemento."""
+    r = RK.detectar("que participacion tiene cada campo en la produccion total de crudo")
+    assert r is not None
+    assert r["top_n"] == 5
+
+
+def test_superlativo_singular_sigue_dando_top_1():
+    """El complemento del anterior: sin señal de distribución, el singular SÍ significa uno.
+    Si este test se pone rojo, el fix de arriba se pasó de ancho."""
+    r = RK.detectar("que campo produce la mayor cantidad de crudo")
+    assert r is not None and r["top_n"] == 1
+
+
+def test_top_n_explicito_gana_sobre_distribucion():
+    """«top 3» explícito manda: el fix no puede pisar un número que el usuario escribió."""
+    r = RK.detectar("dame el top 3 de campos por participacion en la produccion de crudo")
+    assert r is not None and r["top_n"] == 3

@@ -143,6 +143,7 @@ def detectar(texto: str):
         return {"nivel_ranking": nivel, "diferido": _NIVEL_DIFERIDO[nivel]}
 
     metrica = "gap" if any(k in toks for k in _METRICA_GAP) else "real"
+    es_distribucion = any(k in toks for k in _DISTRIBUCION)
     es_bottom = any(k in toks for k in _BOTTOM_TOK) or any(p in t for p in _BOTTOM_PHRASE)
     if metrica == "gap":
         # DEFAULT bottom (faltante). Solo palabras explícitas de excedente lo suben a top.
@@ -155,6 +156,13 @@ def detectar(texto: str):
     m = re.search(r"\bTOP\s+(\d+)\b", t) or re.search(r"\b(\d+)\s+(?:CAMPOS?|ACTIVOS?)\b", t)
     if m:
         top_n = max(1, min(20, int(m.group(1))))
+    elif es_distribucion:
+        # [2026-09-03] Una DISTRIBUCIÓN nunca pide un solo elemento: pide el reparto entre
+        # todos. El singular gramatical de "¿qué participación tiene CADA CAMPO?" engañaba a
+        # la heurística de abajo y devolvía top_n=1 -> el redactor imprimía "1 de 128 campos
+        # genera el 13,7%" (medido en Pruebas 2026-09-03). El singular solo significa "uno"
+        # cuando la señal es un SUPERLATIVO ("¿qué campo produce MÁS crudo?" -> 1).
+        top_n = 5
     else:
         singular = (("CAMPO" in toks and "CAMPOS" not in toks)
                     or ("ACTIVO" in toks and "ACTIVOS" not in toks))
