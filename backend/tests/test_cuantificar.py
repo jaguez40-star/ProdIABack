@@ -751,3 +751,41 @@ def test_ejecutar_n2_promedio_anio_avisa_que_no_aplica():
     res = _ejecutor.ejecutar(resuelta, slots, _desempeno_fn=_fake_mes_cerrado)
     assert res["nivel"] == "N2"
     assert any("referencias alternas" in a for a in res["avisos"])
+
+
+# --- Nivel EXPLÍCITO (bug 2 de jerarquias_sup_error.md, 2026-09-03) ------------------------
+
+def test_nivel_explicito_detecta_activo_y_campo():
+    """Puro: solo lee el texto. Exige adyacencia nivel+nombre (H9 del plan)."""
+    assert _resolver._nivel_explicito("el activo CASTILLA") == "activo"
+    assert _resolver._nivel_explicito("la produccion del activo APIAY mes a mes") == "activo"
+    assert _resolver._nivel_explicito("el campo CASTILLA") == "campo"
+
+
+def test_nivel_explicito_none_sin_senal():
+    """Sin sustantivo de nivel pegado al nombre, no hay señal -> D-D5 decide como siempre."""
+    assert _resolver._nivel_explicito("CASTILLA") is None
+    assert _resolver._nivel_explicito("cuanto crudo produjo Rubiales") is None
+
+
+def test_activo_explicito_gana_a_dd5():
+    """🔑 EL BUG: con «activo» explícito, el activo gana y el campo baja a zoom.
+    Es el inverso exacto de test_prioridad_campo_campo_mas_activo_da_zoom (mismo caso APIAY)."""
+    reps = [
+        {"nivel": "campo", "rama": "A", "valor": "APIAY"},
+        {"nivel": "activo", "rama": "A", "valor": "APIAY"},
+    ]
+    elegido = [r for r in reps if r["nivel"] == _resolver._nivel_explicito("el activo APIAY")]
+    assert len(elegido) == 1 and elegido[0]["nivel"] == "activo"
+
+
+def test_dd5_sigue_intacta_sin_senal():
+    """🔒 REGRESIÓN: sin señal explícita, D-D5 manda (decisión del usuario 2026-07-15).
+    Este test es el guardián de que la corrección no se pasó de ancho."""
+    reps = [
+        {"nivel": "campo", "rama": "A", "valor": "APIAY"},
+        {"nivel": "activo", "rama": "A", "valor": "APIAY"},
+    ]
+    rep_campo, zoom = _resolver._prioridad_campo(reps)
+    assert rep_campo is not None and rep_campo["nivel"] == "campo"
+    assert len(zoom) == 1 and zoom[0]["nivel"] == "activo"

@@ -11,6 +11,8 @@ Frontera: aquí NO interviene el LLM. `resolver_unico()` devuelve UNA identidad 
 o de colisión redundante/Campo; en colisión genuina (Hocol dual, 2 campos distintos) devuelve
 `{"ambiguo": [...]}` — la UX de desambiguación es de una sub-fase posterior (Fase 1e/2).
 """
+import re
+
 import sqlalchemy as sa
 from app.core.db import get_engine
 from app.features.consulta_v2.normaliza import norm
@@ -200,6 +202,37 @@ def _marcar_puente(r: dict) -> dict:
     return r
 
 
+# --- Nivel EXPLÍCITO en el texto (bug 2 de jerarquias_sup_error.md, 2026-09-03) --------------
+# El usuario que escribe «el activo CASTILLA» YA desambiguó: pedirle que lo repita sería no
+# escucharlo (decisión del usuario, 2026-09-03). Hasta hoy esa palabra no entraba en la
+# decisión —grep: cero `nivel_pedido` en todo consulta_v2— y D-D5 respondía el campo homónimo.
+# Medido: el activo APIAY agrupa 13 campos y la respuesta entregaba 1.
+#
+# 🔑 EXIGE ADYACENCIA (nivel + nombre), no la mera presencia de la palabra: 'ACTIVO' es
+# vocabulario estructural y adjetivo común. Sin esto se tragaría «¿qué campos tiene el activo
+# Castilla?» (que es JERARQUIZAR) y «el pozo activo».
+# 🔑 NO altera D-D5 (_prioridad_campo): actúa ANTES y solo cuando hay señal explícita. Sin
+# señal, el default sigue siendo Campo — que es la decisión del usuario del 2026-07-15,
+# vigilada por tests/test_cuantificar.py:22 y tests/test_consulta_desambiguacion.py:46.
+_NIVEL_EXPLICITO_RX = (
+    (re.compile(r"\b(?:EL|LA|LOS|LAS)?\s*ACTIVOS?\s+", re.I), "activo"),
+    (re.compile(r"\b(?:EL|LA|LOS|LAS)?\s*CAMPOS?\s+", re.I), "campo"),
+)
+
+
+def _nivel_explicito(texto: str):
+    """Nivel que el usuario nombró justo antes de la entidad, o None.
+
+    Devuelve 'activo' | 'campo' | None. Solo mira el TEXTO; que ese nivel exista de verdad
+    para la entidad lo comprueba quien llama (no se fuerza un nivel inexistente).
+    """
+    t = norm(texto or "")
+    for rx, nivel in _NIVEL_EXPLICITO_RX:
+        if rx.search(t):
+            return nivel
+    return None
+
+
 def resolver_unico(texto: str) -> dict | None:
     """Resuelve el texto a UNA identidad {nivel, valor, rama, zoom?} aplicando la política de v1:
       - sin match            -> None
@@ -215,15 +248,24 @@ def resolver_unico(texto: str) -> dict | None:
             ids = hit[1]
     if not ids:
         return None
+    nivel_pedido = _nivel_explicito(texto)
     if len(ids) == 1:
         r = dict(ids[0]); r["zoom"] = []
         return _marcar_puente(r)
     modo, rep, reps = _resolver_colision(ids, clave_fisica)
     zoom = []
     if modo == "ask":
-        rep_campo, zoom = _prioridad_campo(reps)
-        if rep_campo is not None:
-            modo, rep = "auto", rep_campo
+        # (1) NIVEL EXPLÍCITO gana sobre D-D5: el usuario ya dijo cuál quiere. Solo si ese
+        #     nivel existe de verdad entre los candidatos (H9) — nunca se fuerza uno ausente.
+        elegido = ([r for r in reps if r["nivel"] == nivel_pedido] if nivel_pedido else [])
+        if len(elegido) == 1:
+            modo, rep = "auto", elegido[0]
+            zoom = [r for r in reps if r is not elegido[0]]
+        else:
+            # (2) sin señal explícita -> D-D5 intacta (default Campo, decisión 2026-07-15)
+            rep_campo, zoom = _prioridad_campo(reps)
+            if rep_campo is not None:
+                modo, rep = "auto", rep_campo
     if modo == "auto":
         r = dict(rep); r["zoom"] = zoom
         return _marcar_puente(r)
