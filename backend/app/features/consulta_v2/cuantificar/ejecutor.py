@@ -10,7 +10,8 @@ CONTABLE salen de `analisis.escenario_mes` (helper aislado, NO toca `desempeno` 
 
 Frontera: NO SQL propio, NO LLM. La prosa (intro) es de 1c; el formato del número es de validador."""
 from app.features.analisis.api import (desempeno as _desempeno_ep, _estado, escenario_mes as _escenario_ep,
-                                       produccion_dia as _prod_dia_ep, curva_dia_mes as _curva_ep)
+                                       produccion_dia as _prod_dia_ep, curva_dia_mes as _curva_ep,
+                                       curva_dia_rango as _curva_rango_ep)
 from app.features.consulta_v2.cuantificar import niveles as _niveles
 from app.features.consulta_v2.cuantificar.validador import fmt_valor as _fmt_valor
 
@@ -345,7 +346,7 @@ def ejecutar_n1d(resuelta: dict, slots: dict, _dia_fn=None) -> dict:
     }
 
 
-def ejecutar_n1dser(resuelta: dict, slots: dict, _curva_fn=None) -> dict:
+def ejecutar_n1dser(resuelta: dict, slots: dict, _curva_fn=None, _curva_rango_fn=None) -> dict:
     """N1DSER: la CURVA DIARIA de un mes («la producción día a día de Akacias en junio»).
 
     [2026-08-26 · QV2-SERIE-DIA] La curva ya la dibujaba `cuant_dia_panel`; lo que faltaba era la
@@ -360,13 +361,27 @@ def ejecutar_n1dser(resuelta: dict, slots: dict, _curva_fn=None) -> dict:
     if rech:
         return rech
     ser = slots.get("serie_dia") or {}
+    ven = slots.get("ventana") or {}
     producto = slots["producto"]
-    pts = [(f, v) for f, v in fn(resuelta["valor"], ser["anio"], ser["mes"],
-                                 _PROD_MAP[producto], nivel=resuelta.get("nivel")) if v > 0]
-    if not pts:
-        return {"aplica": False, "texto": (
-            f"No tengo curva diaria de {producto} para «{resuelta['valor']}» en "
-            f"{_MESES_ES_L[ser['mes']]} {ser['anio']}.")}
+    # [2026-09-03 · CURVA-VENTANA] Dos orígenes para la MISMA curva: un mes calendario
+    # (`serie_dia`, «día a día en junio») o una ventana móvil (`ventana`, «los últimos 30 días»).
+    # 🔑 La ventana solo se usa si NO hay `serie_dia`: si el usuario nombró un mes, ese mes manda.
+    if ven and not ser:
+        pts_all = (_curva_rango_fn or _curva_rango_ep)(
+            resuelta["valor"], ven["ini"], ven["fin"], _PROD_MAP[producto],
+            nivel=resuelta.get("nivel"))
+        pts = [(f, v) for f, v in pts_all if v > 0]
+        if not pts:
+            return {"aplica": False, "texto": (
+                f"No tengo curva diaria de {producto} para «{resuelta['valor']}» "
+                f"entre {ven['ini']} y {ven['fin']}.")}
+    else:
+        pts = [(f, v) for f, v in fn(resuelta["valor"], ser["anio"], ser["mes"],
+                                     _PROD_MAP[producto], nivel=resuelta.get("nivel")) if v > 0]
+        if not pts:
+            return {"aplica": False, "texto": (
+                f"No tengo curva diaria de {producto} para «{resuelta['valor']}» en "
+                f"{_MESES_ES_L[ser['mes']]} {ser['anio']}.")}
     total = sum(v for _f, v in pts)
     avisos = []
     if slots.get("descargo"):
@@ -385,6 +400,12 @@ def ejecutar_n1dser(resuelta: dict, slots: dict, _curva_fn=None) -> dict:
     if any(str(a).startswith("periodo=") for a in (ser.get("asumido") or [])):
         avisos.append(f"No me dijiste el mes, así que tomé {_MESES_ES_L[ser['mes']]} "
                       f"{ser['anio']} (el último con reporte diario).")
+    # [2026-09-03 · CURVA-VENTANA] La ventana se ancla al último día CON REPORTE, no al reloj.
+    # Se declara siempre: el usuario dijo «últimos 30 días» pensando en hoy, y el dato va ~100
+    # días atrás. Callarlo sería dejarle creer que la curva llega hasta ayer.
+    if ven and not ser:
+        avisos.append(f"«Últimos {ven['cantidad']} {ven['unidad']}s» cuenta hacia atrás desde "
+                      f"{ven['fin']}, el último día con reporte diario.")
     # NO se avisa de que a grano día no hay PPTO: ese aviso se retiró de N1D/N1DSEL a propósito
     # (commit 3bb4108) y esta rama es su hermana — reponerlo aquí lo devolvería por la puerta de atrás.
     return {
@@ -395,7 +416,12 @@ def ejecutar_n1dser(resuelta: dict, slots: dict, _curva_fn=None) -> dict:
         "producto": producto, "unidad": slots.get("unidad", "bbl"),
         "resultado": {"valor": total},
         "promedio_dia": total / len(pts),
-        "mes_label": f"{_MESES_ES_L[ser['mes']]} {ser['anio']}",
+        # [2026-09-03 · CURVA-VENTANA] Con ventana no hay UN mes que rotular: la curva puede ir
+        # de julio a agosto. Se rotula el RANGO REAL con dato, que es lo que el gráfico muestra.
+        "mes_label": (f"{pts[0][0].isoformat()} a {pts[-1][0].isoformat()}"
+                      if (ven and not ser) else f"{_MESES_ES_L[ser['mes']]} {ser['anio']}"),
+        "ventana": ({"unidad": ven["unidad"], "cantidad": ven["cantidad"],
+                     "ini": ven["ini"], "fin": ven["fin"]} if (ven and not ser) else None),
         "dias_con_dato": len(pts),
         "rango": [pts[0][0].isoformat(), pts[-1][0].isoformat()],
         "referencia": None, "referencia_valor": None, "cumplimiento_pct": None, "estado": "",

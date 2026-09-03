@@ -491,7 +491,21 @@ def _campos_sin_meta(c, entidad, fin, nivel):
 # ============================================================================
 @router.get("/desempeno")
 def desempeno(entidad: str | None = Query(None), segmento: str = Query("ecp"),
-              nivel: str | None = Query(None), periodo: str | None = Query(None)):
+              nivel: str | None = Query(None), periodo: str | None = Query(None),
+              # [2026-09-03 · CURVA-VENTANA] Ventana móvil explícita para la CURVA DIARIA.
+              # Cuando llegan, la curva (Módulo 2) se acota a [v_ini, v_fin] en vez de al mes.
+              # 🔑 Los KPIs mensuales (Módulo 1) y el ritmo del año (Módulo 3) NO cambian: el
+              #    PPTO se carga por MES y una ventana que cruza meses no tiene un PPTO único
+              #    contra el cual compararse (H3). Se acota SOLO lo que es de grano día.
+              # 🔑 [Corrección post-auditoría, 2026-09-03] Default `None` a secas, NO `Query(None)`.
+              #    `nivel`/`periodo` usan Query(...) sin problema porque TODO llamador interno los
+              #    pasa explícitos (ver ejecutor.py:111-112) — el sentinel nunca sobrevive. `v_ini`/
+              #    `v_fin` son nuevos y NINGÚN llamador interno los pasa: el objeto Query(None) (que
+              #    es verdadero en Python, no None) llegaba intacto a `v_ini or ini` y terminaba en
+              #    el SQL como parámetro — `psycopg.ProgrammingError: cannot adapt type 'Query'`,
+              #    medido corriendo el golden real. `None` a secas sigue siendo un query param HTTP
+              #    opcional válido para FastAPI; solo cambia el default en llamadas Python directas.
+              v_ini: str | None = None, v_fin: str | None = None):
     if segmento == "filiales":
         return _desempeno_filiales()
     import calendar
@@ -512,6 +526,13 @@ def desempeno(entidad: str | None = Query(None), segmento: str = Query("ecp"),
         ids, vid = amb["ids"], amb["vid"]
         aplica_diario = amb["aplica_diario"]
         y, mo, dim, ini, fin = amb["y"], amb["mo"], amb["dim"], amb["ini"], amb["fin"]
+        # [2026-09-03 · CURVA-VENTANA] Bordes de la CURVA. Por defecto son los del mes (`ini`/
+        # `fin` de _ambito); con ventana, los que mandó el llamador. Se usan SOLO en el Módulo 2.
+        # Variables aparte a propósito: si se reasignara `ini`/`fin` se contaminaría el Módulo 1
+        # (`pm["fin"] = fin` en :531 elige la FILA MENSUAL) y el KPI pasaría a leer el mes
+        # equivocado — un bug silencioso de la familia del periodo ignorado.
+        c_ini, c_fin = (v_ini or ini), (v_fin or fin)
+        ventana_activa = bool(v_ini and v_fin)
 
         base = {}
         if ids:
@@ -550,7 +571,7 @@ def desempeno(entidad: str | None = Query(None), segmento: str = Query("ecp"),
         curva = {}
         curva_fechas, dias_rep = [], 0
         if aplica_diario:
-            pd = dict(base); pd["ini"] = ini; pd["fin"] = fin
+            pd = dict(base); pd["ini"] = c_ini; pd["fin"] = c_fin
             rows = c.execute(_bind(f"""
                 SELECT d.fecha, tp.nombre prod, SUM(d.volumen) vol
                 FROM core.fact_produccion_dia_ecp d
@@ -627,6 +648,11 @@ def desempeno(entidad: str | None = Query(None), segmento: str = Query("ecp"),
             "por_producto": por_producto,
             "campos_sin_meta": campos_sin_meta,
             "curva": {"fechas": curva_fechas, "series": series},
+            # [2026-09-03 · CURVA-VENTANA] Declara al frontend que la curva NO es la del mes.
+            # Sin esto el pintor titularía "del mes de agosto" sobre una curva de 30 días a
+            # caballo entre dos meses — exactamente el tipo de afirmación falsa que el proyecto
+            # persigue. `None` cuando no hay ventana: el comportamiento de siempre.
+            "curva_ventana": ({"ini": str(c_ini), "fin": str(c_fin)} if ventana_activa else None),
             "ritmo_mensual": ritmo,
         }
 
@@ -2722,6 +2748,38 @@ def curva_dia_mes(entidad: str, anio: int, mes: int, producto: str,
         p = dict(params)
         p.update({"ini": f"{anio:04d}-{mes:02d}-01",
                   "fin": f"{anio:04d}-{mes:02d}-{dim:02d}", "p": producto.upper()})
+        t = sa.text(f"""
+            SELECT d.fecha, SUM(d.volumen) vol
+            FROM core.fact_produccion_dia_ecp d
+            JOIN core.dim_tipo_producto tp ON tp.tipo_producto_id = d.tipo_producto_id
+            WHERE d.fecha BETWEEN :ini AND :fin AND UPPER(tp.nombre) = :p AND {whr}
+            GROUP BY d.fecha ORDER BY d.fecha""")
+        if ids:
+            t = t.bindparams(sa.bindparam("ids", expanding=True))
+        return [(f, float(v or 0)) for f, v in c.execute(t, p)]
+
+
+def curva_dia_rango(entidad: str, ini, fin, producto: str,
+                    nivel: str | None = None) -> list:
+    """Serie diaria [(date, float)] de UN producto entre dos fechas ARBITRARIAS.
+
+    [2026-09-03 · CURVA-VENTANA] Gemela de `curva_dia_mes` (:2710), que solo sabe de meses
+    calendario. Una ventana móvil («los últimos 30 días») cruza el borde del mes, así que
+    necesita bordes explícitos. La QUERY es la misma —ya era `BETWEEN :ini AND :fin`—; lo
+    único que cambia es de dónde salen esas dos fechas.
+
+    `ini`/`fin` son `date` o 'YYYY-MM-DD'. `producto` en MAYÚSCULAS.
+    🔑 No se toca `curva_dia_mes`: la usan `ejecutar_n1dser` Y `ejecutar_n1dsel`, y cambiarle
+       la firma obligaría a tocar los dos y sus tests. Una hermana cuesta menos y no arriesga.
+    """
+    eng = get_engine()
+    with eng.connect() as c:
+        r = _amb_dia(c, entidad, nivel)
+        if r is None:
+            return []
+        whr, params, ids = r
+        p = dict(params)
+        p.update({"ini": str(ini), "fin": str(fin), "p": producto.upper()})
         t = sa.text(f"""
             SELECT d.fecha, SUM(d.volumen) vol
             FROM core.fact_produccion_dia_ecp d

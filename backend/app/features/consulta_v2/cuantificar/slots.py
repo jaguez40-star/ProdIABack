@@ -545,6 +545,19 @@ def extraer_slots(texto: str, entidad_valor: str | None = None, techo=None) -> d
     # preguntas a N4/N3/N2. Aquí no puede pisar a nadie.
     ventana = detectar_ventana(texto, techo)
 
+    # [2026-09-03 · CURVA-VENTANA] La ventana en DÍAS/SEMANAS eleva N1 → N1DSER: la respuesta
+    # correcta a «los últimos 30 días» es la CURVA de esos 30 días, no el KPI del mes (que es lo
+    # que se respondía, con el rótulo del mes, sin declarar que ignoraba la ventana).
+    #
+    # 🔑 Solo desde N1, el default. N2/N3/N4/N1D/N1DSEL/N1DSER ya tienen dueño y NO se tocan:
+    #    «el acumulado del año en los últimos 30 días» sigue siendo N2. La ventana solo reclama
+    #    las preguntas que NADIE reclamó.
+    # 🔑 Solo unidad `dia`/`semana` (H5). «el último mes» / «los últimos 3 meses» piden VOLUMEN
+    #    mensual y el KPI que hoy responden es correcto; convertirlos en curva sería cambiarle
+    #    la respuesta a una forma muy común sin que nadie lo haya pedido.
+    if ventana is not None and nivel == "N1" and ventana["unidad"] in ("dia", "semana"):
+        nivel = "N1DSER"
+
     per = _periodo_texto(texto)
     defaults = [f"producto={prod}", f"referencia={ref}"]
     # 🔑 El default «periodo=mes actual» NO se declara si hay ventana: sería una contradicción

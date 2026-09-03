@@ -120,9 +120,20 @@ def _panel_datos(res: dict) -> dict:
             "entidad": res["entidad"]["nombre"],
             "nivel": res["entidad"]["nivel"],
             "segmento": "ecp",
-            "periodo": f"{_s[0]} {_s[1]}" if len(_s) > 1 else res["mes_label"],
+            # [2026-09-03 · CURVA-VENTANA v2, H12] Con ventana NO se manda `periodo`. `mes_label`
+            # pasa a ser "2026-07-25 a 2026-08-23" y el split de arriba daría "2026-07-25 a",
+            # una cadena que `_parse_periodo` no reconoce → `periodo_ok=False` viajaría en el
+            # payload significando «no supe honrar el periodo», que sería falso: el KPI mensual
+            # DEBE resolverse por defecto al mes del techo (H3). Con None, `_ambito` hace
+            # exactamente eso y `periodo_ok` queda True.
+            "periodo": (None if res.get("ventana")
+                        else (f"{_s[0]} {_s[1]}" if len(_s) > 1 else res["mes_label"])),
             "productos": [_PROD_DIM.get(res["producto"], "CRUDO")],
             "dia_marcado": None,
+            # [2026-09-03 · CURVA-VENTANA] El frontend NO pinta con estos datos: los usa para
+            # lanzar su propio fetch a /desempeno (multitab_shell.js:3891). Por eso la ventana
+            # tiene que viajar hasta aquí — es lo que el JS convertirá en &v_ini=&v_fin=.
+            "ventana": res.get("ventana"),
         })
     elif nivel in ("N1D", "N1DSEL"):
         d.update({"fecha": res["fecha"], "fecha_label": res["fecha_label"],
