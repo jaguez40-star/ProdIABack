@@ -198,6 +198,26 @@ grupos:
     # plural MAYORES/MENORES ni "PRODUCTOR(ES)". Genérico a propósito (mismo criterio de arriba):
     # da nivel_dominio='fuerte' por el nombre de producto explícito -> enruta directo sin LLM.
     - '(MAYOR|MENOR)(ES)?\s+PRODUCTOR(ES)?\s+DE\s+(CRUDO|GAS|BLANCOS)'
+    # [2026-09-03] DISTRIBUCIÓN/DOMINANCIA CON PRODUCTO EXPLÍCITO. Medido en Pruebas: «¿qué
+    # porcentaje del CRUDO aporta el campo Castilla?» caía en desconocido — 8 de 8 formas de
+    # pedir el reparto fallaban por decir "crudo"/"gas" en vez de "producción", que es de lo
+    # único que colgaba cuantificar. El detector N5 (cuantificar/ranking.py, _DISTRIBUCION) ya
+    # sabía atenderlas; nunca le llegaban.
+    # GENÉRICO a propósito (NO va a patrones_anclados): las 8 dan nivel_dominio='fuerte' por el
+    # nombre del producto -> enrutan directo sin LLM igual. Anclarlo repetiría el error del
+    # 2026-08-02 ("mejores campos de la dieta mediterránea"): sin producto, "¿cómo se distribuye
+    # la participación en el equipo?" saltaría el filtro. Verificado: esa frase da dominio None.
+    # ⚠️ SIN 'PESA|PESAN': 'QUE CAMPOS PESAN' es de ANALIZAR (línea ~206) por decisión del
+    # usuario del 2026-08-24, vigilada por 5 casos del golden. Y aunque entrara, analizar gana
+    # por precedencia_colision — pero la intención debe ser explícita, no accidental.
+    # ⚠️ SIN 'DESGLOS': cuantificar GANA a jerarquizar en precedencia_colision, así que ahí la
+    # colisión NO está protegida. Medido 2026-09-03: incluirla ponía roja a
+    # test_jerarquia_drill_down_verbos_alternos — "desglósame la gerencia PDH por campo" es
+    # drill-down JERÁRQUICO, no una cifra. La palabra ya es de jerarquizar (línea ~93) y del
+    # panel de Analizar (respuesta_analizar.py:57). Se queda donde está.
+    # ⚠️ LIDERA\w*|LIDERO|LIDERARON y NO 'LIDER\w*': la raíz suelta capturaría LIDERAZGO/LÍDERES,
+    # que son organizacionales y no de producción.
+    - '(DISTRIBU\w+|REPART\w+|PARTICIPACION|PORCENTA\w+|CONTRIBU\w+|FRACCION|SHARE|PROPORCION|ENCABEZ\w+|LIDERA\w*|LIDERO|LIDERARON|PUNTER\w+)\s'
   analizar:
     - 'POR\s+QUE'
     - 'A\s+QUE\s+SE\s+DEBE'

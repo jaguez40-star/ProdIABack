@@ -674,3 +674,58 @@ def test_la_entidad_que_de_verdad_termina_en_este_no_se_pierde():
     # NORTE y SUR quedan FUERA de la guarda a propósito: nunca son demostrativos en español.
     assert detectar_entidad("¿Cuánto produjo Castilla Norte este mes?") == "CASTILLA NORTE"
     assert detectar_entidad("¿Cuánto produjo Nare Sur este mes?") == "NARE SUR"
+
+
+# --- Capa 1 · distribución con producto explícito (2026-09-03) -----------------------------
+# Origen: medido en Pruebas — "¿qué porcentaje del CRUDO aporta el campo Castilla?" caía en
+# desconocido porque cuantificar colgaba de la palabra "PRODUCCION". 8 de 8 formas con producto
+# explícito fallaban. Ver Planes/plan_CAPA1-DISTRIBUCION-SIN-PRODUCCION_20260903.md
+
+
+def test_distribucion_con_producto_sin_la_palabra_produccion():
+    """Las formas que fallaban: dicen CRUDO/GAS, no PRODUCCION."""
+    assert clasificar_capa1("que porcentaje del crudo aporta el campo Castilla")[0] == "cuantificar"
+    assert clasificar_capa1("como se reparte el crudo entre los campos")[0] == "cuantificar"
+    assert clasificar_capa1("dame el share de cada campo sobre el crudo")[0] == "cuantificar"
+    assert clasificar_capa1("que fraccion del crudo produce cada campo")[0] == "cuantificar"
+
+
+def test_dominancia_con_producto_sin_la_palabra_produccion():
+    assert clasificar_capa1("que campos encabezan el crudo en agosto")[0] == "cuantificar"
+    assert clasificar_capa1("que campos lideran el gas este mes")[0] == "cuantificar"
+
+
+def test_pesan_sigue_siendo_analizar():
+    """🔒 REGRESIÓN: decisión cerrada del usuario del 2026-08-24 (H5 del plan). El patrón
+    nuevo NO incluye PESA/PESAN, y aunque las incluyera analizar ganaría por
+    precedencia_colision. Este test fija la intención, no solo el resultado."""
+    assert clasificar_capa1("que campos pesan en el gap")[0] == "analizar"
+
+
+def test_causales_siguen_siendo_analizar():
+    """El patrón nuevo no le disputa nada a analizar (H3: controles negativos)."""
+    assert clasificar_capa1("por que bajo la produccion de crudo en Castilla")[0] == "analizar"
+    assert clasificar_capa1("analiza el comportamiento del producto crudo")[0] == "analizar"
+
+
+def test_colision_con_analizar_la_gana_analizar():
+    """🔒 H4: 5 colisiones reales medidas. GAP/META/DIFERIDAS/P50 + vocabulario nuevo en la
+    misma frase -> gana analizar por precedencia_colision. Es la dirección segura y este
+    test la fija: si alguien reordena la precedencia, esto se pone rojo."""
+    assert clasificar_capa1("como se distribuye el gap de crudo entre los campos")[0] == "analizar"
+    assert clasificar_capa1("que porcentaje de la meta de crudo llevamos")[0] == "analizar"
+    assert clasificar_capa1("que participacion tienen las diferidas de crudo")[0] == "analizar"
+
+
+def test_desglose_jerarquico_no_lo_roba_cuantificar():
+    """🔒 H4-bis, la regresión que este plan estuvo a punto de introducir: cuantificar GANA a
+    jerarquizar en la precedencia, así que DESGLOS quedó FUERA del patrón a propósito.
+    Complementa a test_jerarquia_drill_down_verbos_alternos, que fue el que la detectó."""
+    assert clasificar_capa1("desglosame la gerencia PDH por campo")[0] == "jerarquizar"
+
+
+def test_sin_producto_no_dispara_dominio():
+    """🔒 La guarda real del patrón NO es el regex, es el filtro de dominio: el patrón es
+    genérico a propósito (H2). Sin vocabulario de producción, la frase no tiene dominio y
+    no puede enrutar a cuantificar aunque el regex calce."""
+    assert nivel_dominio("como se distribuye la participacion en el equipo") is None
