@@ -140,6 +140,46 @@ _RX_RANGO_GUARDA = re.compile(r"\bENTRE\s+EL\s+\d+\s+Y\s+EL\s+\d+|\bDEL\s+\d+\s+
                               r"\bLOS\s+\d+\s+DIAS|\bPRIMEROS\s+\d+\s+DIAS|\bSEMANA|\bTRIMESTRE|"
                               r"\bL[OA]S\s+DIAS\s+(?:DE|CON)\b|\bTOP\s+\d+\s+DIAS\b")
 
+# [2026-09-03 · VENTANAS-TEMPORALES] Ventana MÓVIL hacia atrás: «los últimos 30 días», «las
+# últimas 6 semanas», «los últimos 3 meses». Es un grano que no existía: hasta ahora la única
+# forma de acotar el tiempo era nombrar un MES o un DÍA concreto, así que estas preguntas
+# caían a `periodo_texto=None` y el motor respondía el mes por defecto SIN declarar que había
+# ignorado la ventana — la misma degradación silenciosa que la guarda de :281-286 existe para
+# impedir, entrando por la puerta del rango en vez de la del mes.
+#
+# 🔑 Exige marcador EXPLÍCITO (ULTIMO/ULTIMA + variantes). NO basta «los 30 días»: esa forma
+#    ya la captura `_RX_RANGO_GUARDA` (:139) y cae al rechazo honesto de no_soportado.py.
+#    Ampliar la ventana a esa forma le robaría el rechazo y respondería algo distinto de lo
+#    que hoy responde, sin que ningún test lo detecte.
+# 🔑 SIN "HASTA HOY"/"HASTA AHORA": están en `_ACUM_KW_FUERTE` (:27) y en `_RX_ACUM_GUARDA`
+#    (:130) y hoy resuelven a N2 (acumulado). Un patrón de ventana que las incluyera le
+#    robaría preguntas a N2, que funciona.
+_UNIDAD_VENTANA = {"DIA": "dia", "DIAS": "dia",
+                   "SEMANA": "semana", "SEMANAS": "semana",
+                   "MES": "mes", "MESES": "mes"}
+
+# Cardinales escritos con letra: «los últimos tres meses» es tan natural como «los últimos 3».
+# Sin esto la forma con letra no matchea y cae al mes por defecto, en silencio.
+_CARDINAL = {"UN": 1, "UNA": 1, "DOS": 2, "TRES": 3, "CUATRO": 4, "CINCO": 5, "SEIS": 6,
+             "SIETE": 7, "OCHO": 8, "NUEVE": 9, "DIEZ": 10, "ONCE": 11, "DOCE": 12,
+             "QUINCE": 15, "VEINTE": 20, "TREINTA": 30}
+
+# Tres construcciones, todas con marcador explícito:
+#   (a) «los últimos 30 días» / «las últimas 6 semanas»  → cantidad explícita
+#   (b) «el último mes» / «la última semana»             → cantidad implícita = 1
+#   (c) «los 30 días anteriores»                          → marcador POSPUESTO
+# El cuantificador es opcional en (a) para admitir «últimos 30 días» sin artículo.
+_RX_VENTANA = re.compile(
+    r"\bULTIM[OA]S?\s+(\d{1,3}|[A-Z]+)\s+(DIAS?|SEMANAS?|MESES|MES)\b"
+    r"|\bULTIM[OA]\s+(DIAS?|SEMANA|MES)\b"
+    r"|\b(\d{1,3})\s+(DIAS?|SEMANAS?|MESES|MES)\s+(?:ANTERIORES|ATRAS|PREVIOS)\b"
+)
+
+# Techo de cordura. Una ventana de 4 dígitos («los últimos 9999 días») no es una pregunta
+# real: es ruido o un intento de forzar una consulta gigante. Se rechaza devolviendo None
+# (→ rechazo honesto) en vez de resolver una ventana absurda y consultar 27 años de serie.
+_VENTANA_MAX = {"dia": 365, "semana": 52, "mes": 24}
+
 
 # [2026-08-26 · QV2-DIA-SEL] Techo FICTICIO para preguntar «¿sabes resolver esta FORMA?» sin
 # tocar BD. La fecha que salga se descarta; solo importa si `detectar_dia` devuelve None o no.
@@ -237,7 +277,14 @@ def menciona_dia(texto: str) -> bool:
     """
     if detectar_dia(texto, TECHO_CENTINELA) is not None:
         return True
-    return _nivel_temporal(texto) == "N1DSER"
+    if _nivel_temporal(texto) == "N1DSER":
+        return True
+    # 🔑 [2026-09-03] La VENTANA también necesita techo. Sin esta rama, `detectar_ventana`
+    #    recibiría techo=None por la ruta real (el llamador no lo pediría) y devolvería None
+    #    siempre: la ventana funcionaría en los tests —donde el techo se pasa a mano— y NO en
+    #    producción. Es literalmente el bug que :230-236 documenta para la serie diaria.
+    #    Se usa el CENTINELA, igual que arriba: solo importa si resuelve o no, no qué fecha sale.
+    return detectar_ventana(texto, TECHO_CENTINELA) is not None
 
 
 def detectar_dia(texto: str, techo=None) -> dict | None:
@@ -390,6 +437,67 @@ def periodo_serie_dia(texto: str, techo=None) -> dict | None:
     return {"anio": anio, "mes": mo, "asumido": asum}
 
 
+def detectar_ventana(texto: str, techo=None) -> dict | None:
+    """Ventana MÓVIL hacia atrás, o None si la pregunta no pide una. [2026-09-03 · VENTANAS-TEMPORALES]
+
+    Devuelve:
+      {"unidad": "dia"|"semana"|"mes", "cantidad": int,
+       "ini": "YYYY-MM-DD", "fin": "YYYY-MM-DD", "asumido": [...]}
+
+    `techo` (date) = último día CON DATO, no el reloj. Sin techo no se puede aterrizar la
+    ventana en fechas y se devuelve None: es preferible el rechazo honesto a inventar un
+    ancla. 🔑 Este módulo es PURO — el techo entra como PARÁMETRO, aquí no se consulta BD
+    ni se llama a date.today(); el reporte va ~100 días atrás del reloj y anclar al reloj
+    respondería sobre fechas sin dato.
+
+    La ventana es INCLUSIVA en ambos extremos y termina en el techo: «los últimos 30 días»
+    con techo=2026-08-23 es [2026-07-25, 2026-08-23], que son 30 días contados. Un `ini`
+    calculado con `days=30` daría 31 días — el error de poste clásico, por eso va `- 1`.
+    """
+    t = norm(texto or "")
+    m = _RX_VENTANA.search(t)
+    if m is None:
+        return None
+
+    # Las 3 alternativas del regex dejan sus grupos en posiciones distintas; solo una casa.
+    if m.group(1) is not None:            # (a) «últimos 30 días» / «últimos tres meses»
+        crudo, uni_txt = m.group(1), m.group(2)
+        if crudo.isdigit():
+            cant = int(crudo)
+        elif crudo in _CARDINAL:
+            cant = _CARDINAL[crudo]
+        else:
+            return None                   # palabra no reconocida como cardinal: no se adivina
+    elif m.group(3) is not None:          # (b) «el último mes» → cantidad implícita 1
+        cant, uni_txt = 1, m.group(3)
+    else:                                 # (c) «30 días anteriores»
+        cant, uni_txt = int(m.group(4)), m.group(5)
+
+    uni = _UNIDAD_VENTANA.get(uni_txt)
+    if uni is None or cant < 1:
+        return None
+    if cant > _VENTANA_MAX[uni]:
+        return None                       # fuera de rango razonable → rechazo honesto
+
+    if techo is None:
+        return None                       # sin ancla no hay ventana que aterrizar
+
+    fin = techo
+    if uni == "dia":
+        ini = fin - _dt.timedelta(days=cant - 1)
+    elif uni == "semana":
+        ini = fin - _dt.timedelta(weeks=cant) + _dt.timedelta(days=1)
+    else:                                 # mes: se retrocede por calendario, no por 30 días
+        y, mo = fin.year, fin.month - (cant - 1)
+        while mo < 1:
+            y, mo = y - 1, mo + 12
+        ini = _dt.date(y, mo, 1)
+
+    return {"unidad": uni, "cantidad": cant,
+            "ini": ini.isoformat(), "fin": fin.isoformat(),
+            "asumido": [f"ventana={cant} {uni}(s) hasta {fin.isoformat()}"]}
+
+
 def extraer_slots(texto: str, entidad_valor: str | None = None, techo=None) -> dict:
     """Slots aterrizados. `entidad_valor` (nombre canónico ya resuelto) permite excluir sus tokens del
     grounding de producto (AF10). `periodo_texto`=None → desempeno usa el mes por defecto (último).
@@ -430,14 +538,25 @@ def extraer_slots(texto: str, entidad_valor: str | None = None, techo=None) -> d
         if sdia is None:
             nivel = "N1"          # sin mes ni techo no hay curva que pedir: se degrada al mes
 
+    # [2026-09-03 · VENTANAS-TEMPORALES] La ventana se resuelve AL FINAL, después de que el
+    # nivel ya quedó fijado. Es una capa ADITIVA: NO toca `nivel_temporal`. Resolverla antes
+    # de `detectar_dia` habría convertido «el mejor día de los últimos 30 días» en algo que
+    # ya no es un selector de día; resolverla dentro de `_nivel_temporal` le habría robado
+    # preguntas a N4/N3/N2. Aquí no puede pisar a nadie.
+    ventana = detectar_ventana(texto, techo)
+
     per = _periodo_texto(texto)
     defaults = [f"producto={prod}", f"referencia={ref}"]
-    if per is None:
+    # 🔑 El default «periodo=mes actual» NO se declara si hay ventana: sería una contradicción
+    #    en la propia declaración de supuestos (la ventana ES el periodo, y no es un mes).
+    if per is None and ventana is None:
         defaults.append("periodo=mes actual")
     if dia is not None:
         defaults.extend(dia.get("asumido", []))
     if sdia is not None:
         defaults.extend(sdia.get("asumido", []))
+    if ventana is not None:
+        defaults.extend(ventana.get("asumido", []))
     return {
         "variable": variable,
         "producto": prod,
@@ -448,5 +567,6 @@ def extraer_slots(texto: str, entidad_valor: str | None = None, techo=None) -> d
         "periodo_texto": per,
         "dia": dia,
         "serie_dia": sdia,
+        "ventana": ventana,
         "defaults_asumidos": defaults,
     }

@@ -5,6 +5,28 @@
 **Rol del lector:** agente EXECUTOR
 **Alcance:** UN solo archivo de producción (`slots.py`) + UN archivo de tests nuevo.
 
+> **Verificación v2 (2026-09-03, segunda pasada):** el plan se auditó contra el código real
+> aplicando el regex y la lógica de `detectar_ventana`, no razonándolos. **Todo lo esencial
+> quedó confirmado midiendo:**
+> - ✅ El regex `_RX_VENTANA` acierta 11/11 casos (7 que resuelven + 4 que rechazan), incluidos
+>   «los últimos dos mil días» → None y «los últimos datos/reportes» → None (el `[A-Z]+` no
+>   captura ruido sin unidad temporal detrás).
+> - ✅ El cálculo de fechas coincide con TODOS los `assert` de §3.5: 30 días = [07-25, 08-23]
+>   (30 contados), 3 meses = junio-01, cruce de año = 2025-12-01. El error de poste está bien
+>   resuelto con `-1`.
+> - ✅ **La regresión central está descartada por medición:** NINGUNA de las 11 frases de los
+>   otros niveles (N1/N2/N3/N4/día/mes pasado) matchea `_RX_VENTANA`. La ventana es aditiva de
+>   verdad, no puede robar preguntas.
+> - ✅ H1 confirmado end-to-end: «mes pasado» resuelve en `slots.py:359` **y** `api.py:385-389`.
+> - ✅ Imports ya presentes: `import datetime as _dt` (:13) y `import re` (:14). El código nuevo
+>   los usa sin declararlos — no hay que añadir ninguno.
+> - 🟡 **Hallazgo menor añadido (N1):** «el último día» NO lo captura `detectar_dia` (da None),
+>   así que este plan lo resolvería como ventana de 1 día. Es coherente, pero conviene que el
+>   executor lo sepa: no es una colisión, es cobertura nueva legítima.
+>
+> **Conclusión: el plan es correcto y seguro. Ejecutable tal como está, con los ajustes
+> menores de referencias de línea de abajo.**
+
 ---
 
 ## 0. Contexto para el agente EXECUTOR
@@ -97,19 +119,17 @@ exactamente el bug del periodo ignorado que costó la sesión del 26-ago.
 **Decisión cerrada: la ventana viaja en una CLAVE NUEVA (`ventana`), no en `periodo_texto`.**
 `periodo_texto` no se toca. Los 3 consumidores siguen recibiendo lo mismo que hoy.
 
-### 🔴 H3 — Colisión real con `_RX_RANGO_GUARDA`: «LOS 30 DIAS» ya está capturado como rechazo.
+### 🔴 H3 — `_RX_RANGO_GUARDA` NO colisiona con «los últimos N días» (verificado midiendo).
 
-`slots.py:139-141` contiene `\bLOS\s+\d+\s+DIAS`. Ese patrón **matchea «los últimos 30 días»**
-(el texto normalizado contiene `LOS ULTIMOS 30 DIAS`… no: contiene `LOS`, luego `ULTIMOS`,
-luego `30 DIAS` — el regex exige `LOS` inmediatamente seguido del número, así que **NO** matchea).
+`slots.py:139-141` contiene `\bLOS\s+\d+\s+DIAS`, que exige que el número siga **inmediatamente**
+a `LOS`. En «los últimos 30 días» entre `LOS` y `30` está `ULTIMOS`, así que **NO** matchea.
+Confirmado en v2 aplicando ambos patrones: «los últimos 30 días» resuelve como ventana y NO
+cae al guarda.
 
-Verificado por lectura literal del patrón: `LOS\s+\d+` requiere que el número siga a `LOS`.
-En «los últimos 30 días» entre `LOS` y `30` está `ULTIMOS`. **No hay colisión.**
-
-Pero **sí la hay en la forma sin «últimos»**: «en los 30 días» → `LOS 30 DIAS` → hoy cae a
-`_RX_RANGO_GUARDA` y `detectar_dia` devuelve `None`, lo que produce un rechazo honesto vía
-`no_soportado.py`. **Esa forma se deja como está** (rechazo honesto), y la ventana solo se
-activa con marcador explícito (`ULTIMOS`/`ULTIMAS`). Ver §3, `_RX_VENTANA`.
+La forma **sin «últimos»** sí la captura el guarda: «en los 30 días» → `LOS 30 DIAS` → hoy
+`detectar_dia` devuelve `None` → rechazo honesto vía `no_soportado.py`. **Esa forma se deja
+como está**, y la ventana solo se activa con marcador explícito (`ULTIMO`/`ULTIMA` + variantes).
+Verificado: `detectar_ventana("en los 30 dias", techo)` → `None`. Ver §3, `_RX_VENTANA`.
 
 ### 🟡 H4 — La precedencia es un campo minado ya cableado. Hay UN solo lugar seguro.
 
@@ -695,6 +715,9 @@ Explícitamente **NO** se hace en este plan:
 - Renombrar `menciona_dia` a algo que describa también la ventana (§3.4).
 - Ventanas que no terminan en el techo («los 30 días **de mayo**», «entre marzo y junio»).
   Hoy caen a `_RX_RANGO_GUARDA` y su rechazo honesto se conserva.
+- **«el último día»** (verificado v2): `detectar_dia` no lo captura, así que este plan lo
+  resolvería como ventana de 1 día. Es cobertura nueva legítima, NO una colisión — pero si se
+  quisiera que fuera un selector de día (el más reciente con dato), sería otro plan.
 - Trimestres y semestres. `_RX_RANGO_GUARDA:140` ya los rechaza honestamente.
 - Cualquier cambio en frontend, en el clasificador (`maquina_q.py`), en `patrones_grupo.yaml`
   o en el golden de clasificación.
