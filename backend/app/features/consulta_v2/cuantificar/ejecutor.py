@@ -131,7 +131,9 @@ def ejecutar_n1(resuelta: dict, slots: dict, _desempeno_fn=None, _escenario_fn=N
         estado = _ESTADO_LABEL.get(_estado(cumpl), "")
     nivel = resuelta.get("nivel")
     etiqueta = _etiqueta_nivel(nivel, resuelta)
-    proyeccion = (not mes["completo"]) and bool(mes["dias_con_data"])
+    # [2026-09-03 · MES-CERRADO] `cerrado`, no `completo` — ver validador.py. Un mes pasado con
+    # el reporte diario incompleto NO es una proyección: su REAL mensual ya es definitivo.
+    proyeccion = (not mes.get("cerrado", mes["completo"])) and bool(mes["dias_con_data"])
 
     avisos = []
     if slots.get("descargo"):                                   # AF5: blancos-mes = confianza media

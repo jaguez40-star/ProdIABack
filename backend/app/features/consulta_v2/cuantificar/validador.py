@@ -106,7 +106,11 @@ def formatear_cuerpo(res: dict) -> str:
     # N1: mes puntual. Regla de proyección + referencia elegida (Fase 4).
     mes = res["mes"]
     ref_label = res.get("referencia_label", "presupuesto")
-    corte = ("mes cerrado" if mes["completo"]
+    # [2026-09-03 · MES-CERRADO] Se rotula por `cerrado`, no por `completo`. `completo` mide la
+    # cobertura del reporte DIARIO: un mes ya cerrado con huecos en el diario (medido: CASTILLA
+    # mayo 2026, 17/31 días) salía como «proyección · 17/31 días», llamando provisional a una
+    # cifra definitiva. `.get(..., completo)` mantiene el comportamiento con payloads viejos.
+    corte = ("mes cerrado" if mes.get("cerrado", mes["completo"])
              else f"proyección · {mes['dias_con_data']}/{mes['dias_del_mes']} días")
     linea = (f"{res['entidad_cualificada']} produjo {real} {unidad} de {prod} en {mes['nombre']} "
              f"{mes['anio']} — {pct} del {ref_label} ({res['estado']}) · {corte}.")

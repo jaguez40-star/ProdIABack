@@ -313,3 +313,54 @@ def test_mes_sin_cierre_se_DECLARA_no_se_traga():
     res = _ejecutor.ejecutar_n2(_ENT, {"producto": "crudo", "unidad": "bbl"},
                                 _desempeno_fn=_fake_falta_un_cierre)
     assert any("marzo" in a and "NO está" in a for a in res["avisos"])
+
+
+# ---------------- [2026-09-03 · MES-CERRADO] el rotulo no llama proyeccion a lo cerrado -------
+
+def _mes(anio, m, nombre, dias, dim, cerrado):
+    return {"anio": anio, "mes": m, "nombre": nombre, "dias_con_data": dias,
+            "dias_del_mes": dim, "completo": dias >= dim, "cerrado": cerrado}
+
+
+def test_corte_dice_mes_cerrado_con_diario_incompleto():
+    """🔴 mayo 2026: 17/31 dias de reporte diario, pero mes CERRADO y REAL definitivo.
+    Antes el corte decia «proyección · 17/31 días»."""
+    from app.features.consulta_v2.cuantificar.validador import formatear_cuerpo
+    res = {"nivel": "N1", "entidad_cualificada": "el Campo CASTILLA", "producto": "crudo",
+           "unidad": "bbl", "resultado": {"valor": 6753417.0}, "referencia_valor": 6600000.0,
+           "cumplimiento_pct": 102.3, "estado": "Alineado",
+           "mes": _mes(2026, 5, "Mayo", 17, 31, True), "avisos": []}
+    assert "mes cerrado" in formatear_cuerpo(res)
+    assert "proyección" not in formatear_cuerpo(res)
+
+
+def test_corte_sigue_diciendo_proyeccion_en_el_mes_en_curso():
+    """No regresión: agosto (30/31, el mes del techo) SI es proyección."""
+    from app.features.consulta_v2.cuantificar.validador import formatear_cuerpo
+    res = {"nivel": "N1", "entidad_cualificada": "el Campo CASTILLA", "producto": "crudo",
+           "unidad": "bbl", "resultado": {"valor": 6738232.0}, "referencia_valor": 6425758.0,
+           "cumplimiento_pct": 104.9, "estado": "Alineado",
+           "mes": _mes(2026, 8, "Agosto", 30, 31, False), "avisos": []}
+    assert "proyección · 30/31 días" in formatear_cuerpo(res)
+
+
+def test_huella_no_marca_proyeccion_en_un_mes_cerrado():
+    def _fake(entidad="X", segmento="ecp", nivel=None, periodo=None):
+        return {"encontrada": True, "sin_datos": False, "sin_cierre": False,
+                "mes": _mes(2026, 5, "Mayo", 17, 31, True),
+                "por_producto": [{"producto": "CRUDO", "real": 6753417.0, "ppto": 6600000.0}],
+                "campos_sin_meta": []}
+    res = _ejecutor.ejecutar_n1(_ENT, {"producto": "crudo", "unidad": "bbl", "referencia": "PPTO"},
+                                _desempeno_fn=_fake)
+    assert res["huella"]["es_proyeccion"] is False
+
+
+def test_corte_cae_a_completo_si_falta_cerrado():
+    """Compatibilidad: payload viejo sin `cerrado` se comporta como antes."""
+    from app.features.consulta_v2.cuantificar.validador import formatear_cuerpo
+    m = _mes(2026, 5, "Mayo", 17, 31, True)
+    del m["cerrado"]
+    res = {"nivel": "N1", "entidad_cualificada": "el Campo CASTILLA", "producto": "crudo",
+           "unidad": "bbl", "resultado": {"valor": 1.0}, "referencia_valor": 1.0,
+           "cumplimiento_pct": 100.0, "estado": "Alineado", "mes": m, "avisos": []}
+    assert "proyección · 17/31 días" in formatear_cuerpo(res)

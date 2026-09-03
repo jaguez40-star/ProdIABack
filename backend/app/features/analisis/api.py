@@ -451,6 +451,10 @@ def _ambito(c, entidad, nivel=None, periodo=None):
     dim = calendar.monthrange(y, mo)[1]
     return {"ids": ids, "vid": vid, "y": y, "mo": mo, "dim": dim,
             "ini": f"{y:04d}-{mo:02d}-01", "fin": f"{y:04d}-{mo:02d}-{dim:02d}",
+            # [2026-09-03 · MES-CERRADO] `maxd` (último día CON DATO) sale también hacia fuera:
+            # es lo único que permite saber si el mes consultado es el que sigue en curso o uno
+            # ya pasado. Aditivo — ningún consumidor actual lo pide.
+            "maxd": maxd,
             "aplica_diario": aplica_diario, "periodo_ok": periodo_ok}
 
 
@@ -643,8 +647,17 @@ def desempeno(entidad: str | None = Query(None), segmento: str = Query("ecp"),
             "entidad": entidad, "encontrada": True, "aplica_diario": aplica_diario,
             "sin_cierre": sin_cierre,
             "periodo_ok": amb["periodo_ok"],
+            # [2026-09-03 · MES-CERRADO] `cerrado` es NUEVO y NO es sinónimo de `completo`:
+            #   · `completo` = COBERTURA DEL REPORTE DIARIO (dias_con_data >= dias_del_mes).
+            #   · `cerrado`  = el mes ya terminó: es ANTERIOR al del último dato, o es el del
+            #                  último dato con todos sus días reportados.
+            # Se separan porque un mes cerrado puede tener huecos en el reporte diario (medido:
+            # CASTILLA mayo 2026, 17/31 días, con cierre mensual y REAL definitivo). Usar
+            # `completo` para rotular «proyección» decía que una cifra final era provisional.
+            # `completo` NO cambia de significado: la curva diaria lo sigue necesitando tal cual.
             "mes": {"anio": y, "mes": mo, "nombre": MESES_ES[mo],
-                    "dias_con_data": dias_rep, "dias_del_mes": dim, "completo": dias_rep >= dim},
+                    "dias_con_data": dias_rep, "dias_del_mes": dim, "completo": dias_rep >= dim,
+                    "cerrado": ((y, mo) < (amb["maxd"].year, amb["maxd"].month)) or (dias_rep >= dim)},
             "por_producto": por_producto,
             "campos_sin_meta": campos_sin_meta,
             "curva": {"fechas": curva_fechas, "series": series},
