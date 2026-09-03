@@ -174,15 +174,29 @@ def detectar(texto: str):
         # 🔑 Sigue dando 1 en el singular REAL: «¿qué campo del activo Castilla produce más?»
         # rankea campos y dice CAMPO en singular -> 1. Verificado en 8 casos.
         if nivel == "activo":
-            singular = "ACTIVO" in toks and "ACTIVOS" not in toks
+            # [2026-09-03 · regla C] Un ACTIVO es un agregado (agrupa campos): «¿cuál es el
+            # activo que más produce?» pide ver el REPARTO entre los grandes, no un nombre
+            # suelto. Medido en Pruebas: devolvía «RUBIALES 12.176.071» como cifra única. Sin
+            # número explícito (ese caso ya salió por `if m:` arriba, :157), el ranking de
+            # activos muestra el Top 5. El singular gramatical («cuál ES EL activo») no lo
+            # colapsa a 1 — a diferencia del CAMPO suelto, que sí quiere un nombre.
+            top_n = 5
         else:
+            # CAMPO suelto sin contenedor: «¿cuál es el campo que más produce?» SÍ quiere un
+            # nombre. El singular real manda. (El contenedor «del activo X» no llega hasta aquí
+            # como singular: lo resuelve la guarda del scope en respuesta_cuantificar.py.)
             singular = "CAMPO" in toks and "CAMPOS" not in toks
-        top_n = 1 if singular else 5
+            top_n = 1 if singular else 5
 
     producto = next((_PROD_TOK[k] for k in _PROD_TOK if k in toks), "crudo")
     per = next((mm for mm in _MESES if mm in (texto or "").lower()), None)
     return {"nivel_ranking": nivel, "metrica": metrica, "direccion": direccion,
-            "top_n": top_n, "producto": producto, "periodo_texto": per}
+            "top_n": top_n, "producto": producto, "periodo_texto": per,
+            # [2026-09-03 · H9] ¿El top_n lo escribió el usuario («top 3 campos») o salió de la
+            # heurística gramatical? La guarda del scope necesita distinguirlo: solo puede
+            # ampliar el top_n al activo completo cuando NO fue pedido a mano. `m` es el match
+            # del número explícito de :156; si casó, el top_n vino de ahí.
+            "top_n_explicito": m is not None}
 
 
 def _fin_mes(c, periodo_texto):

@@ -253,6 +253,16 @@ def responder(texto: str, entidad: str | None = None, usuario=None, conversation
                 if _scope:
                     rk = dict(rk)
                     rk["scope_label"] = f"el Activo {_res_ent['valor']}"
+                    # [2026-09-03] Cuando el usuario nombra un activo-CONTENEDOR, el panel
+                    # muestra TODOS sus campos aunque el verbo sea singular («qué campo del
+                    # activo Castilla produce más» → los 3 campos de Castilla, no solo el
+                    # máximo). Decisión del usuario 2026-09-03.
+                    # 🔑 Solo si el top_n NO lo escribió el usuario (H9): «top 2 campos del
+                    # activo APIAY» debe respetar el 2, no inflarse a los 4 del activo. Un
+                    # `max()` ciego pisaría ese número — por eso detectar() marca la
+                    # procedencia en `top_n_explicito`.
+                    if not rk.get("top_n_explicito"):
+                        rk["top_n"] = len(_scope)
                     res = _ranking.calcular(rk, campos_scope=_scope)
                     if res.get("aplica"):
                         cuerpo = _ranking.formatear_cuerpo(res)

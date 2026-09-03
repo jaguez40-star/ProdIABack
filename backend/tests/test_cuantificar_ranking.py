@@ -427,13 +427,68 @@ def test_singular_real_dentro_de_un_activo_sigue_dando_1():
     assert r is not None and r["nivel_ranking"] == "campo" and r["top_n"] == 1
 
 
-def test_ranking_de_activos_singular_sigue_dando_1():
-    """🔒 REGRESIÓN: cuando lo que se rankea SON activos, el ACTIVO singular sí manda."""
+def test_ranking_de_activos_singular_ahora_da_5():
+    """[2026-09-03 · plan_PANEL-ACTIVO-SINGULAR, regla C] SUPERADO por decisión del usuario:
+    un ACTIVO es un agregado, y "cuál es el activo que más produce" debe mostrar el reparto
+    (Top 5), no un nombre suelto. Antes este test protegía top_n=1 para esta frase; ahora
+    protege el nuevo comportamiento — ver H4 del plan y test_ranking_activos_singular_da_top5."""
     r = RK.detectar("cual es el activo que mas crudo produce")
-    assert r is not None and r["nivel_ranking"] == "activo" and r["top_n"] == 1
+    assert r is not None and r["nivel_ranking"] == "activo" and r["top_n"] == 5
 
 
 def test_top_n_explicito_gana_sobre_el_contenedor():
     """🔒 Un número escrito por el usuario manda sobre toda heurística."""
     r = RK.detectar("top 3 campos del activo APIAY")
     assert r is not None and r["top_n"] == 3
+
+
+# --- V-DETECT · regla C: ranking de activos no colapsa a 1 (2026-09-03) --------------------
+
+def test_ranking_activos_singular_da_top5():
+    """🔴 P3 (medido en Pruebas): «¿cuál es el activo que más produce?» daba top_n=1 y el chat
+    respondía «RUBIALES 12.176.071» como cifra única. Un activo es un agregado: se muestra el
+    Top 5 para ver el reparto. Regla C, decisión del usuario 2026-09-03."""
+    r = RK.detectar("cual es el activo que mas crudo produce")
+    assert r is not None and r["nivel_ranking"] == "activo" and r["top_n"] == 5
+
+
+def test_ranking_activos_singular_variantes():
+    a = RK.detectar("el activo con mas produccion")
+    assert a is not None and a["nivel_ranking"] == "activo" and a["top_n"] == 5
+
+
+def test_campo_suelto_singular_sigue_dando_1():
+    """🔒 REGRESIÓN CENTRAL: «¿cuál es el campo que más produce?» NO cambia — sigue devolviendo
+    un nombre. La regla C solo toca el nivel activo. Si esto se pone rojo, el plan se pasó de
+    ancho a las preguntas de campo, que son cotidianas y funcionan."""
+    r = RK.detectar("cual es el campo que mas crudo produce")
+    assert r is not None and r["nivel_ranking"] == "campo" and r["top_n"] == 1
+
+
+def test_campo_del_activo_singular_sigue_en_1_en_detectar():
+    """🔑 «qué campo del activo Castilla produce más» sigue dando top_n=1 en detectar() —el
+    scope lo AMPLÍA después, en respuesta_cuantificar. detectar() no cambia para este caso."""
+    r = RK.detectar("que campo del activo Castilla produce mas crudo")
+    assert r is not None and r["nivel_ranking"] == "campo" and r["top_n"] == 1
+
+
+def test_numero_explicito_de_activos_manda():
+    """🔒 «top 3 activos» respeta el 3, la regla C no lo pisa (sale por `if m:`, no por el else)."""
+    r = RK.detectar("top 3 activos por produccion de crudo")
+    assert r is not None and r["top_n"] == 3
+
+
+def test_top_n_explicito_se_marca_en_el_contrato():
+    """🔑 H9: la guarda del scope necesita saber si el top_n lo escribió el usuario, para no
+    ampliarlo al activo completo cuando sí lo hizo. «top 2 campos del activo APIAY» debe
+    respetar el 2."""
+    con = RK.detectar("top 2 campos del activo APIAY")
+    sin = RK.detectar("que campo del activo Castilla produce mas crudo")
+    assert con is not None and con["top_n_explicito"] is True and con["top_n"] == 2
+    assert sin is not None and sin["top_n_explicito"] is False
+
+
+def test_top_n_explicito_tambien_por_la_forma_N_campos():
+    """El regex de :156 tiene dos alternativas: «top N» y «N campos/activos». Ambas marcan."""
+    r = RK.detectar("los 3 campos que mas crudo producen")
+    assert r is not None and r["top_n_explicito"] is True and r["top_n"] == 3
