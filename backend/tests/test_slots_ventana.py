@@ -25,11 +25,38 @@ _TECHO = datetime.date(2026, 8, 23)      # último día con dato en Pruebas al e
     ("produccion de Castilla el ultimo mes", "mes", 1),
     ("produccion de Castilla la ultima semana", "semana", 1),
     ("produccion de Castilla los 15 dias anteriores", "dia", 15),
+    # [2026-09-03] Forma (d): la cantidad ANTEPUESTA a «últimos». Medida en Pruebas — la frase
+    # real del usuario caía al mes del techo y respondía agosto sin avisar.
+    ("Muestra la produccion de crudo de los 3 ultimos meses para Castilla", "mes", 3),
+    ("produccion de Castilla los tres ultimos meses", "mes", 3),
+    ("produccion de Castilla en los 30 ultimos dias", "dia", 30),
+    ("como viene Castilla en las 6 ultimas semanas", "semana", 6),
 ])
 def test_ventana_resuelve(frase, unidad, cant):
     r = detectar_ventana(frase, _TECHO)
     assert r is not None, frase
     assert r["unidad"] == unidad and r["cantidad"] == cant
+
+
+@pytest.mark.parametrize("antepuesta,pospuesta", [
+    ("los ultimos 3 meses", "los 3 ultimos meses"),
+    ("los ultimos 30 dias", "los 30 ultimos dias"),
+    ("las ultimas 6 semanas", "las 6 ultimas semanas"),
+    ("los ultimos tres meses", "los tres ultimos meses"),
+])
+def test_ventana_orden_libre_da_lo_mismo(antepuesta, pospuesta):
+    """En español el orden es libre; las dos formas deben aterrizar en la MISMA ventana.
+    Sin esto, una de las dos responde el mes por defecto en silencio."""
+    a = detectar_ventana("produccion de Castilla en " + antepuesta, _TECHO)
+    b = detectar_ventana("produccion de Castilla en " + pospuesta, _TECHO)
+    assert a is not None and b is not None
+    assert a == b
+
+
+def test_ultimos_meses_sin_cantidad_sigue_sin_resolver():
+    """«los últimos meses» no dice CUÁNTOS: la forma (d) captura "LOS", que no es cardinal.
+    Debe seguir devolviendo None (rechazo honesto), como antes de añadir (d)."""
+    assert detectar_ventana("produccion de Castilla en los ultimos meses", _TECHO) is None
 
 
 def test_ventana_dias_es_inclusiva():

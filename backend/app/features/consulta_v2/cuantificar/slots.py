@@ -164,15 +164,25 @@ _CARDINAL = {"UN": 1, "UNA": 1, "DOS": 2, "TRES": 3, "CUATRO": 4, "CINCO": 5, "S
              "SIETE": 7, "OCHO": 8, "NUEVE": 9, "DIEZ": 10, "ONCE": 11, "DOCE": 12,
              "QUINCE": 15, "VEINTE": 20, "TREINTA": 30}
 
-# Tres construcciones, todas con marcador explícito:
+# Cuatro construcciones, todas con marcador explícito:
 #   (a) «los últimos 30 días» / «las últimas 6 semanas»  → cantidad explícita
 #   (b) «el último mes» / «la última semana»             → cantidad implícita = 1
 #   (c) «los 30 días anteriores»                          → marcador POSPUESTO
+#   (d) «los 3 últimos meses» / «los tres últimos meses»  → CANTIDAD ANTEPUESTA a «últimos»
 # El cuantificador es opcional en (a) para admitir «últimos 30 días» sin artículo.
+# 🔑 (d) [2026-09-03] Medido en Pruebas: «Muestra la producción de crudo de los 3 últimos meses
+#    para Castilla» NO casaba con ninguna de las tres primeras y caía al mes del techo (agosto),
+#    respondiendo otra cosa SIN avisar — la misma familia de fallo silencioso que el periodo
+#    ignorado. En español el orden es libre («los últimos 3 meses» ≡ «los 3 últimos meses») y el
+#    detector solo conocía uno de los dos.
+#    Va la ÚLTIMA en la alternancia para no desplazar los grupos 1-5 que el dispatcher ya lee.
+#    Con «los últimos meses» (sin cantidad) captura "LOS", que no es cardinal → None, exactamente
+#    lo que devolvía antes: no hay regresión, solo una forma más reconocida.
 _RX_VENTANA = re.compile(
     r"\bULTIM[OA]S?\s+(\d{1,3}|[A-Z]+)\s+(DIAS?|SEMANAS?|MESES|MES)\b"
     r"|\bULTIM[OA]\s+(DIAS?|SEMANA|MES)\b"
     r"|\b(\d{1,3})\s+(DIAS?|SEMANAS?|MESES|MES)\s+(?:ANTERIORES|ATRAS|PREVIOS)\b"
+    r"|\b(\d{1,3}|[A-Z]+)\s+ULTIM[OA]S\s+(DIAS?|SEMANAS?|MESES|MES)\b"
 )
 
 # Techo de cordura. Una ventana de 4 dígitos («los últimos 9999 días») no es una pregunta
@@ -459,19 +469,24 @@ def detectar_ventana(texto: str, techo=None) -> dict | None:
     if m is None:
         return None
 
-    # Las 3 alternativas del regex dejan sus grupos en posiciones distintas; solo una casa.
+    # Las 4 alternativas del regex dejan sus grupos en posiciones distintas; solo una casa.
+    # La cantidad se resuelve UNA vez al final, común a todas: antes vivía dentro de la rama (a)
+    # y al añadir (d) habría que duplicarla, que es como nacen las divergencias entre formas.
     if m.group(1) is not None:            # (a) «últimos 30 días» / «últimos tres meses»
         crudo, uni_txt = m.group(1), m.group(2)
-        if crudo.isdigit():
-            cant = int(crudo)
-        elif crudo in _CARDINAL:
-            cant = _CARDINAL[crudo]
-        else:
-            return None                   # palabra no reconocida como cardinal: no se adivina
     elif m.group(3) is not None:          # (b) «el último mes» → cantidad implícita 1
-        cant, uni_txt = 1, m.group(3)
-    else:                                 # (c) «30 días anteriores»
-        cant, uni_txt = int(m.group(4)), m.group(5)
+        crudo, uni_txt = "1", m.group(3)
+    elif m.group(4) is not None:          # (c) «30 días anteriores»
+        crudo, uni_txt = m.group(4), m.group(5)
+    else:                                 # (d) «los 3 últimos meses» / «los tres últimos meses»
+        crudo, uni_txt = m.group(6), m.group(7)
+
+    if crudo.isdigit():
+        cant = int(crudo)
+    elif crudo in _CARDINAL:
+        cant = _CARDINAL[crudo]
+    else:
+        return None                       # palabra no reconocida como cardinal: no se adivina
 
     uni = _UNIDAD_VENTANA.get(uni_txt)
     if uni is None or cant < 1:
