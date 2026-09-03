@@ -28,7 +28,7 @@ import re
 
 import sqlalchemy as sa
 
-from app.core.db import get_engine
+from app.core.db import get_engine, get_ops_engine
 from app.features.consulta_v2.normaliza import norm
 from app.features.consulta_v2.cuantificar.validador import fmt_valor
 
@@ -225,7 +225,46 @@ _SQL = {
 }
 
 
-def calcular(slots: dict, _engine=None) -> dict:
+# [2026-09-03] JERARQUÍA: ops.wells_attributes es la FUENTE ÚNICA DE VERDAD y está al día
+# (regla del usuario, 2026-09-03): lo que no esté ahí, NO EXISTE. Vive en OTRA BD
+# (get_ops_engine), así que NO se puede JOIN-ear con core.* — se lee aparte y se cruza en
+# Python.
+# ⚠️ DOS FILTROS OBLIGATORIOS, medidos el 2026-09-03:
+#   1. `vice_presidency NOT LIKE 'V%'` — conviven DOS jerarquías. La rama V* es la VIEJA
+#      (435 pozos activos y 6.219 abandonados, contra 15.438 activos de la G*). Sin este
+#      filtro CASTILLA sale con dos activos distintos y el panel es incorrecto.
+#   2. `vice_presidency <> '0'` — filas basura (vp/ger/act = '0') que duplican 5 campos.
+# Quedan 2 ambigüedades reales (AULLADOR, SARDINATA): un campo en dos activos. Se respetan
+# como dice la fuente — aparecerá en el panel de ambos. Fuera de alcance de este plan.
+_SQL_CAMPOS_DE_ACTIVO = """
+    SELECT DISTINCT UPPER(TRIM(field)) AS campo
+    FROM ops.wells_attributes
+    WHERE field IS NOT NULL
+      AND vice_presidency NOT LIKE 'V%'
+      AND vice_presidency <> '0'
+      AND UPPER(TRIM(active)) = :activo
+"""
+
+
+def campos_de_activo(activo: str) -> set:
+    """Campos que pertenecen al activo, según la fuente única (ops.wells_attributes).
+
+    Devuelve un set de nombres NORMALIZADOS (UPPER, sin espacios extremos) o `set()` si la
+    BD de robustez no está disponible o el activo no existe. Nunca lanza: sin jerarquía el
+    llamador degrada al ranking global, que es el comportamiento de hoy.
+    """
+    if not activo:
+        return set()
+    try:
+        eng = get_ops_engine()
+        with eng.connect() as c:
+            rows = c.execute(sa.text(_SQL_CAMPOS_DE_ACTIVO), {"activo": norm(activo)}).all()
+        return {(r[0] or "").strip() for r in rows if r[0]}
+    except Exception:
+        return set()   # degradación con gracia (mismo criterio que _cargar_vp_robustez)
+
+
+def calcular(slots: dict, _engine=None, campos_scope: set | None = None) -> dict:
     """Ejecuta el ranking. Devuelve el contrato N5 (aplica=True) o {aplica:False, texto}."""
     nivel = slots.get("nivel_ranking")
     if nivel not in _SQL:
@@ -235,6 +274,7 @@ def calcular(slots: dict, _engine=None) -> dict:
     unidad = "MSCF" if prod == "gas" else "bbl"
     metrica, direccion, top_n = slots["metrica"], slots["direccion"], slots["top_n"]
     plural = _NIVEL_PLURAL[nivel]
+    scope_label = slots.get("scope_label")   # p.ej. "el Activo CASTILLA"; None = ranking global
 
     eng = _engine or get_engine()
     with eng.connect() as c:
@@ -247,6 +287,11 @@ def calcular(slots: dict, _engine=None) -> dict:
     datos = [((r[0] or "").strip(), float(r[1] or 0), float(r[2] or 0),
               (r[3] or "").strip() if r[3] else "")
              for r in rows if (r[1] or r[2])]
+    # [2026-09-03] SCOPE por activo: se filtra en PYTHON, no en SQL — la jerarquía vive en
+    # otra BD (ops.wells_attributes) y no se puede JOIN-ear. `None` = ranking global (el
+    # comportamiento de siempre); un set vacío NO llega aquí (el llamador degrada antes).
+    if campos_scope:
+        datos = [d for d in datos if d[0].upper() in campos_scope]
     con_real = [d for d in datos if d[1] > 0]          # CERO TRAICIONERO: 0 no es "poca producción"
     sin_registro = len(datos) - len(con_real)
 
@@ -300,7 +345,7 @@ def calcular(slots: dict, _engine=None) -> dict:
         "producto": prod, "unidad": unidad,
         "periodo_label": f"{nombre_mes} {anio}", "es_proyeccion": es_proy,
         "items": items, "total_universo": len(pool), "sin_registro": sin_registro,
-        "concentracion_pct": conc,
+        "concentracion_pct": conc, "scope_label": scope_label,
     }
 
 

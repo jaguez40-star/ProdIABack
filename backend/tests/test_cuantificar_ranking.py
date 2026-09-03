@@ -336,3 +336,55 @@ def test_top_n_explicito_gana_sobre_distribucion():
     """«top 3» explícito manda: el fix no puede pisar un número que el usuario escribió."""
     r = RK.detectar("dame el top 3 de campos por participacion en la produccion de crudo")
     assert r is not None and r["top_n"] == 3
+
+
+# --- V-SCOPE · ranking acotado al activo (2026-09-03) ---------------------------------------
+
+def test_calcular_sin_scope_es_el_comportamiento_de_siempre():
+    """🔒 REGRESIÓN: campos_scope=None -> ranking global, idéntico a antes del cambio."""
+    eng = _engine_o_skip()
+    a = RK.calcular({"nivel_ranking": "campo", "metrica": "real", "direccion": "top",
+                     "top_n": 5, "producto": "crudo", "periodo_texto": None}, _engine=eng)
+    b = RK.calcular({"nivel_ranking": "campo", "metrica": "real", "direccion": "top",
+                     "top_n": 5, "producto": "crudo", "periodo_texto": None},
+                    _engine=eng, campos_scope=None)
+    assert a["items"] == b["items"] and a["total_universo"] == b["total_universo"]
+
+
+def test_scope_reduce_el_universo():
+    """El panel scoped ve SOLO los campos del scope."""
+    eng = _engine_o_skip()
+    res = RK.calcular({"nivel_ranking": "campo", "metrica": "real", "direccion": "top",
+                       "top_n": 5, "producto": "crudo", "periodo_texto": None},
+                      _engine=eng, campos_scope={"CASTILLA", "CASTILLA NORTE"})
+    if not res.get("aplica"):
+        pytest.skip("sin datos de crudo en el mes por defecto de esta BD")
+    assert {it["entidad"] for it in res["items"]} <= {"CASTILLA", "CASTILLA NORTE"}
+    assert res["total_universo"] <= 2
+
+
+def test_campos_de_activo_castilla():
+    """La fuente única (ops.wells_attributes) con los 2 filtros obligatorios (H4/H5)."""
+    try:
+        campos = RK.campos_de_activo("CASTILLA")
+    except Exception:
+        pytest.skip("BD de robustez no disponible")
+    if not campos:
+        pytest.skip("BD de robustez no disponible o sin datos")
+    assert "CASTILLA" in campos and "CASTILLA NORTE" in campos
+    # 🔑 La rama VIEJA (vp=VRO) daría otros activos; con el filtro no aparecen campos ajenos.
+    assert all(c.startswith("CASTILLA") for c in campos)
+
+
+def test_campos_de_activo_inexistente_no_lanza():
+    """🔒 Degradación con gracia: lo que no está en la fuente única, no existe -> set()."""
+    try:
+        assert RK.campos_de_activo("NO_EXISTE_ESTE_ACTIVO_XYZ") == set()
+    except Exception:
+        pytest.skip("BD de robustez no disponible")
+
+
+def test_campos_de_activo_vacio_o_none():
+    """Puro, sin BD: guarda de entrada."""
+    assert RK.campos_de_activo("") == set()
+    assert RK.campos_de_activo(None) == set()

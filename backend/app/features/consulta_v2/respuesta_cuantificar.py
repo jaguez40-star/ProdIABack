@@ -242,7 +242,25 @@ def responder(texto: str, entidad: str | None = None, usuario=None, conversation
         #     globales y CASTILLA en las scoped → este gate no produce falsos positivos.
         _hit = _resolver.buscar_en_texto(texto)
         ent_det = entidad or (_hit[0] if _hit else None)
-        if ent_det and _resolver.resolver_unico(ent_det) is not None:
+        _res_ent = _resolver_con_contexto(ent_det, texto) if ent_det else None
+        if _res_ent is not None and not _res_ent.get("ambiguo"):
+            # [2026-09-03] SCOPED por ACTIVO: el panel de distribución acotado a los campos
+            # de ese activo. Antes esto se declinaba entero («llega en una próxima fase»).
+            # Solo aplica a nivel=activo con nivel_ranking=campo: «los campos DEL activo X».
+            # El resto (campo, gerencia, VP) sigue declinando — ver más abajo.
+            if _res_ent.get("nivel") == "activo" and rk.get("nivel_ranking") == "campo":
+                _scope = _ranking.campos_de_activo(_res_ent["valor"])
+                if _scope:
+                    rk = dict(rk)
+                    rk["scope_label"] = f"el Activo {_res_ent['valor']}"
+                    res = _ranking.calcular(rk, campos_scope=_scope)
+                    if res.get("aplica"):
+                        cuerpo = _ranking.formatear_cuerpo(res)
+                        mensaje = respuesta_base.envolver(
+                            _intro_ranking(res, usuario), cuerpo, _CIERRE_RANK)
+                        return {"mensaje": mensaje,
+                                "panel": {"tipo": "cuant_rank", "datos": _panel_rank(res)}}
+                # sin jerarquía o sin datos → cae a la declinación honesta de abajo
             return {"mensaje": (
                 f"El ranking DENTRO de «{ent_det}» llega en una próxima fase. Por ahora puedo "
                 f"rankear sobre toda la operación —por ejemplo, «los 5 campos que más "
@@ -343,4 +361,4 @@ def _panel_rank(res: dict) -> dict:
     """Datos del panel derecho del ranking (doble entregable HD4)."""
     return {k: res[k] for k in ("nivel_ranking", "metrica", "direccion", "producto", "unidad",
                                 "periodo_label", "es_proyeccion", "items", "total_universo",
-                                "sin_registro", "concentracion_pct")}
+                                "sin_registro", "concentracion_pct", "scope_label")}
