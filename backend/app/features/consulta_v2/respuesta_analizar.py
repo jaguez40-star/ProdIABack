@@ -46,6 +46,21 @@ Responde SOLO con JSON válido: {{"intro": "..."}}"""
 _CIERRE = "¿Quieres el detalle por campo, o la proyección de cierre?"
 _CIERRE_PROY = "¿Quieres ver qué campos explican el faltante?"
 
+
+def _resolver_con_contexto(nombre, texto):
+    """resolver_unico(nombre, contexto=texto), degradando si el resolver fue sustituido.
+
+    [2026-09-03] 13 tests de test_p50_referencia.py monkeypatchean `resolver_unico` con
+    lambdas de UN argumento para inyectar la entidad resuelta. Llamarla siempre con dos las
+    rompería, y esos tests fijan el contrato de Analizar — el que se adapta es este módulo,
+    no ellos. Con el resolver real, el contexto llega y el nivel explícito funciona; con un
+    doble de test, se comporta como antes.
+    """
+    try:
+        return _resolver.resolver_unico(nombre, contexto=texto)
+    except TypeError:
+        return _resolver.resolver_unico(nombre)
+
 # [2026-08-26] Preguntas POR CAMPOS: el panel se abre en el desglose por campo, no en el
 # acordeón entero. 🔑 Las dos frases de arriba OFRECEN exactamente esto («el detalle por campo»,
 # «qué campos explican el faltante»), y hasta ahora aceptarlas devolvía el panorama completo —
@@ -151,7 +166,13 @@ def _responder_core(texto: str, entidad: str | None = None, usuario=None, conver
 
     # 2) Entidad (RA-2, Fase 1). Aplica por igual a causal/proyeccion/diferidas/economia (FB-5/H8:
     #    diferidas y economia necesitan la entidad para filtrar por campo/activo).
-    resuelta = _resolver.resolver_unico(entidad or texto)
+    # [2026-09-03] `contexto`: `entidad` es solo el NOMBRE ya extraído por maquina_q, sin el
+    # nivel que el usuario escribió. Sin esto, «el activo Castilla» se analiza como el CAMPO
+    # homónimo (mismo bug que en cuantificar) — ver resolver._nivel_explicito.
+    # 🔑 Se pasa POSICIONAL y con guarda: 13 tests (test_p50_referencia.py) monkeypatchean
+    # `resolver_unico` con lambdas de UN argumento; llamarla siempre con dos las rompe. La
+    # guarda mantiene el contrato que esos tests fijan y no los obliga a cambiar.
+    resuelta = _resolver_con_contexto(entidad or texto, texto)
     if resuelta and resuelta.get("ambiguo"):
         nombres = ", ".join(sorted({r["valor"] for r in resuelta["ambiguo"]}))
         return {"mensaje": (f"«{entidad or texto}» coincide con más de una entidad ({nombres}). "

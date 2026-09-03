@@ -233,13 +233,21 @@ def _nivel_explicito(texto: str):
     return None
 
 
-def resolver_unico(texto: str) -> dict | None:
+def resolver_unico(texto: str, contexto: str | None = None) -> dict | None:
     """Resuelve el texto a UNA identidad {nivel, valor, rama, zoom?} aplicando la política de v1:
       - sin match            -> None
       - 1 identidad          -> esa
       - colisión redundante  -> auto (representante Campo)
       - colisión con Campo    -> D-D5 Campo directo (+ zoom a Activo si existe)
       - colisión genuina/dual -> {"ambiguo": [reps]} (desambiguación = sub-fase posterior)
+
+    `contexto` = la PREGUNTA ORIGINAL, cuando `texto` es solo el nombre ya extraído.
+    [2026-09-03] Sin esto el detector de nivel explícito quedaba CIEGO en la app real: los
+    llamadores hacen `resolver_unico(entidad or texto)` y `maquina_q.detectar_entidad` ya
+    redujo «¿Producción del Activo CASTILLA?» a «CASTILLA» — la palabra «activo» se perdía
+    antes de llegar aquí (medido en Pruebas: respondía «el Campo CASTILLA»). OPCIONAL a
+    propósito: sin él el comportamiento es idéntico al anterior, así que ningún llamador ni
+    test que pase un solo argumento se rompe.
     """
     ids = resolver(texto)
     if not ids:                       # no fue match exacto (¿vino el texto entero?) → escanear n-gramas
@@ -248,7 +256,7 @@ def resolver_unico(texto: str) -> dict | None:
             ids = hit[1]
     if not ids:
         return None
-    nivel_pedido = _nivel_explicito(texto)
+    nivel_pedido = _nivel_explicito(contexto or texto)
     if len(ids) == 1:
         r = dict(ids[0]); r["zoom"] = []
         return _marcar_puente(r)

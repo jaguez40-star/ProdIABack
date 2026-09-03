@@ -56,6 +56,21 @@ _CIERRE_RANK = "Si quieres, te lo doy por otro producto o cambiando el orden."
 # maquina_q._continuacion y devolvería un acumulado en vez de lo ofrecido aquí.
 _CIERRE_DIA = "Si quieres, te doy el total del mes o el de otro día."
 
+
+def _resolver_con_contexto(nombre, texto):
+    """resolver_unico(nombre, contexto=texto), degradando si el resolver fue sustituido.
+
+    [2026-09-03] Varios tests monkeypatchean `resolver_unico` con lambdas de UN argumento
+    para inyectar la entidad resuelta. Llamarla siempre con dos las rompería, y esos tests
+    fijan el contrato de este módulo — el que se adapta es el código, no ellos. Con el
+    resolver real el contexto llega y el nivel explícito funciona; con un doble de test, se
+    comporta como antes.
+    """
+    try:
+        return _resolver.resolver_unico(nombre, contexto=texto)
+    except TypeError:
+        return _resolver.resolver_unico(nombre)
+
 # [2026-08-04] Intro PROPIO del ranking (N5). Reusar PROMPT_CUANT enmarcaba mal: dice "una CIFRA de
 # producción de {entidad}", así que con entidad="un ranking de campos" el LLM colapsaba a lo singular
 # ("aquí tienes la cifra del campo") ante una LISTA de 5. Este prompt le dice explícitamente que es un
@@ -242,7 +257,12 @@ def responder(texto: str, entidad: str | None = None, usuario=None, conversation
 
     # La entidad ya la detectó maquina_q (detectar_entidad); el resolver aplica D-D5 sobre ella.
     # Fallback: si no vino, resolver_unico escanea el texto por n-gramas.
-    resuelta = _resolver.resolver_unico(entidad or texto)
+    # [2026-09-03] `contexto`: cuando `entidad` viene, es solo el NOMBRE ya extraído
+    # («CASTILLA») y el nivel que el usuario escribió («el ACTIVO Castilla») se perdería. El
+    # resolver lo necesita para el desempate de nivel explícito — ver resolver._nivel_explicito.
+    # 🔑 Vía helper con guarda: varios tests monkeypatchean `resolver_unico` con lambdas de UN
+    # argumento; llamarla siempre con dos las rompe. Ver _resolver_con_contexto.
+    resuelta = _resolver_con_contexto(entidad or texto, texto)
     # [2026-08-26 · QV2-GLOBAL] Sin entidad NOMBRADA → toda la producción de Ecopetrol, en vez de
     # declinar. «cómo ha sido la producción de crudo este mes» es una pregunta legítima y el dato
     # existe: `desempeno(entidad=None)` devuelve el global (verificado). Hasta ahora el catálogo de

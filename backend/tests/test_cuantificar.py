@@ -789,3 +789,31 @@ def test_dd5_sigue_intacta_sin_senal():
     rep_campo, zoom = _resolver._prioridad_campo(reps)
     assert rep_campo is not None and rep_campo["nivel"] == "campo"
     assert len(zoom) == 1 and zoom[0]["nivel"] == "activo"
+
+
+def test_contexto_llega_al_resolver_cuando_la_entidad_ya_fue_extraida():
+    """🔴 EL FALLO QUE SE ESCAPÓ (medido en Pruebas 2026-09-03): el arreglo del nivel
+    explícito funcionaba en aislamiento pero estaba DESCONECTADO en la app real.
+
+    `responder()` llama `resolver_unico(entidad or texto)` y maquina_q.detectar_entidad ya
+    redujo «¿Producción del Activo CASTILLA?» a «CASTILLA» — la palabra «activo» se perdía
+    antes de llegar al detector, y el chat seguía respondiendo «el Campo CASTILLA».
+
+    Este test fija el CONTRATO del contexto sin tocar BD: con `contexto`, el detector ve la
+    frase completa; sin él, solo el nombre."""
+    texto = "Cual es la Produccion del Activo CASTILLA"
+    # lo que la app le pasa como `texto` es solo el nombre ya extraído:
+    assert _resolver._nivel_explicito("CASTILLA") is None
+    # ...y el contexto es lo que salva la señal:
+    assert _resolver._nivel_explicito(texto) == "activo"
+
+
+def test_resolver_con_contexto_tolera_un_resolver_sustituido(monkeypatch):
+    """🔒 REGRESIÓN: 13 tests de test_p50_referencia.py monkeypatchean `resolver_unico` con
+    lambdas de UN argumento. El helper debe degradar en vez de reventar con TypeError —
+    pasó al implementar esto y rompió esos 13 de golpe."""
+    import app.features.consulta_v2.respuesta_cuantificar as _rc
+    monkeypatch.setattr(_rc._resolver, "resolver_unico",
+                        lambda x: {"valor": "RUBIALES", "rama": "A", "nivel": "campo"})
+    r = _rc._resolver_con_contexto("RUBIALES", "cuanto produjo el activo RUBIALES")
+    assert r["nivel"] == "campo"        # el doble manda; no se rompe la llamada
