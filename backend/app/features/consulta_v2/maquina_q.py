@@ -141,8 +141,18 @@ def _continuacion(texto, ctx):
     # «cuántos pozos en mayo» se reescribía a «produccion de CASTILLA cuantos pozos en mayo» y
     # el usuario recibía una cifra de producción en vez del número de pozos. La guarda devuelve
     # esas frases a la rama estructural, que es la suya.
+    # [2026-09-03 · VENTANA-CONT] La VENTANA se consulta al DETECTOR REAL, no a una lista de
+    # palabras paralela. Medido: «¿en los últimos 6 meses?» tras un N2 de CASTILLA devolvía None
+    # y caía a Desconocido («No logré entender tu pregunta») — el usuario estaba a mitad de una
+    # conversación de Cuantificar y el motor perdía el hilo por una forma temporal que él MISMO
+    # sabe resolver desde `detectar_ventana`. Añadir "ULTIMOS"/"ULTIMAS" a _TEMP_CONT_KW habría
+    # creado un segundo criterio de ventana que se desincroniza del primero — el fallo que
+    # `_forma_no_soportada_ranking` (respuesta_cuantificar.py) ya documenta haber sufrido. Un
+    # detector, dos consumidores.
+    # 🔑 Techo CENTINELA: solo se pregunta «¿es esto una ventana?»; la fecha que salga se descarta.
+    _es_ventana = _slots_dia.detectar_ventana(texto, _slots_dia.TECHO_CENTINELA) is not None
     if (ctx.get("grupo") == "cuantificar" and ctx.get("entidad") and not ent
-            and any(k in t for k in _TEMP_CONT_KW)
+            and (any(k in t for k in _TEMP_CONT_KW) or _es_ventana)
             and not any(k in t for k in _ESTRUCT_KW)):
         prod_t = ctx.get("producto", "crudo")
         pieza_t = "" if prod_t == "crudo" else f"{prod_t} de "

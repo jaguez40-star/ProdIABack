@@ -210,3 +210,31 @@ def test_sin_ventana_el_n2_no_declara_ventana():
                                 _desempeno_fn=_fake_desempeno)
     assert not any("cuentan hacia atr" in a for a in res["avisos"])
     assert res["periodo_label"] == "enero–abril 2026"
+
+
+# ---------------- [2026-09-03 · VENTANA-CONT] la ventana como CONTINUACION ----------------
+
+def test_continuacion_hereda_la_entidad_con_ventana():
+    """🔑 Medido antes: «¿en los últimos 6 meses?» tras un N2 de CASTILLA devolvía None y caía a
+    Desconocido, perdiendo el hilo a mitad de una conversación de Cuantificar."""
+    from app.features.consulta_v2.maquina_q import _continuacion
+    ctx = {"grupo": "cuantificar", "entidad": "CASTILLA", "producto": "crudo"}
+    for frase in ("en los ultimos 6 meses?", "en los ultimos 30 dias?",
+                  "y en las ultimas 6 semanas?"):
+        r = _continuacion(frase, ctx)
+        assert r is not None and "CASTILLA" in r, frase
+
+
+def test_continuacion_ventana_preserva_el_producto():
+    """AF9: tras un N1/N2 de gas, la continuación con ventana no vuelve a crudo."""
+    from app.features.consulta_v2.maquina_q import _continuacion
+    ctx = {"grupo": "cuantificar", "entidad": "CUSIANA", "producto": "gas"}
+    assert "gas" in _continuacion("en los ultimos 6 meses?", ctx)
+
+
+def test_continuacion_ventana_no_pisa_lo_estructural():
+    """La guarda _ESTRUCT_KW sigue mandando: «cuántos pozos» no es una cifra de producción."""
+    from app.features.consulta_v2.maquina_q import _continuacion
+    ctx = {"grupo": "cuantificar", "entidad": "CASTILLA", "producto": "crudo"}
+    r = _continuacion("cuantos pozos tiene?", ctx)
+    assert r is None or "produccion de" not in r
