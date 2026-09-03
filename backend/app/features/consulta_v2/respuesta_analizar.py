@@ -31,7 +31,9 @@ from app.features.consulta_v2.analizar import plantilla as _plantilla
 from app.features.consulta_v2.analizar import diferidas as _diferidas
 from app.features.consulta_v2.analizar import economia as _economia
 from app.features.consulta_v2.analizar import p50_referencia as _p50
+from app.features.consulta_v2.analizar import tendencia as _tendencia
 from app.features.analisis.api import president as _president_ep
+from app.features.analisis.api import desempeno as _desempeno_ep
 
 _s = get_settings()
 
@@ -144,7 +146,8 @@ def _intro(alcance: str, usuario) -> str:
 
 def _responder_core(texto: str, entidad: str | None = None, usuario=None, conversation_id=None,
                      _ejecutivo_fn=None, _diferidas_fn=None, _economia_fn=None, _split_fn=None,
-                     _p50_fn=None, _vp_fn=None, _president_fn=None, _serie_fn=None) -> dict:
+                     _p50_fn=None, _vp_fn=None, _president_fn=None, _serie_fn=None,
+                     _desempeno_fn=None) -> dict:
     """Devuelve SIEMPRE {"mensaje": str, "panel": dict|None} (contrato HD4, patrón jerarquizar/
     cuantificar). `_ejecutivo_fn`/`_diferidas_fn`/`_economia_fn`/`_split_fn`/`_p50_fn`/`_vp_fn`/
     `_president_fn`/`_serie_fn` = inyección para tests (evita BD/LLM). 3 sub-intenciones producen
@@ -160,6 +163,9 @@ def _responder_core(texto: str, entidad: str | None = None, usuario=None, conver
     vp_fn = _vp_fn or _p50.vp_de_campo
     president_fn = _president_fn or _president_ep
     serie_fn = _serie_fn or _p50.serie_por_vp
+    # [2026-09-03 · TENDENCIA] Inyectable como los demás `_fn`: los tests pasan una serie fija
+    # y este módulo no toca BD en pruebas.
+    desemp_fn = _desempeno_fn or _desempeno_ep
 
     # 1) Sub-intención (determinista). Fase 3: economia YA no es stub -> se resuelve tras la entidad.
     sub = _subrouter.sub_intencion(texto)
@@ -344,6 +350,50 @@ def _responder_core(texto: str, entidad: str | None = None, usuario=None, conver
         return {"mensaje": f"«{ent_valor or 'ECP'}» no tiene datos suficientes en ese periodo para un análisis.",
                 "panel": None}
 
+    # [2026-09-03 · TENDENCIA] Punto 2 de inteligencia de tiempo. Lee la serie mensual que
+    # `desempeno` ya devuelve en `ritmo_mensual` — CERO consultas nuevas (H5).
+    # 🔑 Los 4 argumentos van EXPLÍCITOS. `desempeno` es un endpoint FastAPI y sus defaults son
+    #    objetos Query(...); uno sobreviviente llegó al SQL y reventó con "cannot adapt type
+    #    'Query'" (analisis/api.py:504-511). Mismo patrón que niveles.py:25 y ejecutor.py:111.
+    # 🔑 HE4: solo meses CERRADOS. `mes_actual` marca el que está en curso y se descarta aquí;
+    #    la serie de `ritmo_mensual` lo incluye porque el tablero lo pinta punteado, pero una
+    #    regresión sobre un mes a medio reportar inclina la recta con un dato incompleto.
+    # 🔑 El producto sale de `_producto_explicito` (:86), que YA existe: sin él, «la tendencia
+    #    del gas de Cusiana» respondería crudo en silencio (V5).
+    if sub == "tendencia":
+        _prod = _producto_explicito(texto, ent_valor) or "CRUDO"
+        _d = desemp_fn(entidad=ent_valor, segmento="ecp", nivel=nivel, periodo=None)
+        if not _d.get("encontrada") or _d.get("sin_datos"):
+            return {"mensaje": f"No tengo serie mensual de producción para {alcance}.",
+                    "panel": None}
+        _r = _d.get("ritmo_mensual") or {}
+        _act = _r.get("mes_actual")
+        _puntos = [
+            {"mes": m, "num": n, "valor": v}
+            for m, n, v in zip(_r.get("meses") or [], _r.get("meses_num") or [],
+                               (_r.get("series") or {}).get(_prod) or [])
+            if v is not None and (_act is None or n < _act)
+        ]
+        _t = _tendencia.leer(_puntos)
+        cuerpo = _plantilla.tendencia(_t, ent_valor, _prod)
+        intro = _intro(alcance, usuario)
+        mensaje = respuesta_base.envolver(
+            intro, cuerpo, "¿Quieres el detalle mes a mes, o la proyección de cierre?")
+        # Panel SOLO si hay lectura (mismo criterio que p50_vp/diferidas): sin serie, un bloque
+        # en la pila repetiría el mismo "no tengo datos" que ya dice el texto.
+        panel = None
+        if _t.get("aplica"):
+            panel = {"tipo": "analiza_tend", "datos": {
+                "entidad_cualificada": alcance,
+                "producto": _plantilla._PROD_L.get(_prod, "crudo"),   # minúscula: __cnProdCol
+                "unidad": _plantilla._UNIDAD.get(_prod, "bbl"),
+                "anio": (_d.get("mes") or {}).get("anio"),
+                "meses": _t["meses"], "valores": _t["valores"], "serie_mm": _t["serie_mm"],
+                "direccion": _t["direccion"], "pct_mensual": _t["pct_mensual"],
+                "avisos": [],
+            }}
+        return {"mensaje": mensaje, "panel": panel}
+
     # 5) Cuerpo determinista por sub-intención (VERBATIM de la data del ejecutivo).
     panel = None
     if sub == "proyeccion":
@@ -399,23 +449,25 @@ def _responder_core(texto: str, entidad: str | None = None, usuario=None, conver
 
 def responder(texto: str, entidad: str | None = None, usuario=None, conversation_id=None,
               _ejecutivo_fn=None, _diferidas_fn=None, _economia_fn=None, _split_fn=None,
-              _p50_fn=None, _vp_fn=None, _president_fn=None, _serie_fn=None) -> str:
+              _p50_fn=None, _vp_fn=None, _president_fn=None, _serie_fn=None,
+              _desempeno_fn=None) -> str:
     """Wrapper compat: devuelve SIEMPRE un str (nunca None) — igual que antes de que `_responder_core`
     ganara panel. Los llamadores/tests existentes que esperan `str` no se tocan."""
     return _responder_core(texto, entidad=entidad, usuario=usuario, conversation_id=conversation_id,
                            _ejecutivo_fn=_ejecutivo_fn, _diferidas_fn=_diferidas_fn,
                            _economia_fn=_economia_fn, _split_fn=_split_fn,
                            _p50_fn=_p50_fn, _vp_fn=_vp_fn, _president_fn=_president_fn,
-                           _serie_fn=_serie_fn)["mensaje"]
+                           _serie_fn=_serie_fn, _desempeno_fn=_desempeno_fn)["mensaje"]
 
 
 def responder_con_panel(texto: str, entidad: str | None = None, usuario=None, conversation_id=None,
                         _ejecutivo_fn=None, _diferidas_fn=None, _economia_fn=None, _split_fn=None,
-                        _p50_fn=None, _vp_fn=None, _president_fn=None, _serie_fn=None) -> dict:
+                        _p50_fn=None, _vp_fn=None, _president_fn=None, _serie_fn=None,
+                        _desempeno_fn=None) -> dict:
     """{"mensaje": str, "panel": dict|None} — la usa maquina_q.py (mismo contrato que
     respuesta_cuantificar.responder / respuesta_jerarquizar.responder_cordial)."""
     return _responder_core(texto, entidad=entidad, usuario=usuario, conversation_id=conversation_id,
                            _ejecutivo_fn=_ejecutivo_fn, _diferidas_fn=_diferidas_fn,
                            _economia_fn=_economia_fn, _split_fn=_split_fn,
                            _p50_fn=_p50_fn, _vp_fn=_vp_fn, _president_fn=_president_fn,
-                           _serie_fn=_serie_fn)
+                           _serie_fn=_serie_fn, _desempeno_fn=_desempeno_fn)

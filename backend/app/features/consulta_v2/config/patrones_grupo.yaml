@@ -259,6 +259,16 @@ grupos:
     - 'JALA[N]?\s+(PARA\s+)?ABAJO'
     - 'RAZONES?\s+(DE|DEL)'
     - 'MOTIVOS?\s+(DE|DEL)'
+    # [2026-09-03 · TENDENCIA] Formas de pedir la LECTURA de la serie que la Capa 1 no atrapaba
+    # y caían al LLM (o a cuantificar por 'PRODUCCION\s+DE'). NO se añade 'EVOLUCION' ni
+    # 'MES\s+A\s+MES': son de N3 en cuantificar y hoy responden la curva correctamente.
+    - 'DECLINACION'
+    - 'DECLINA\w*'
+    - '(MEDIA|PROMEDIO)\s+MOVIL'
+    - 'SUAVIZAD\w*'
+    - 'RITMO\s+DE\s+(CAIDA|DECLIN\w*)'
+    - 'COMO\s+VIENE'
+    - '(VIENE|VA)\s+(SUBIENDO|BAJANDO|CAYENDO)'
 
 # Colisión (2+ grupos atrapan): gana el primero de esta lista. Razón (motor_Q.md §1.1):
 # con señales mixtas la pregunta casi siempre quiere el nivel más profundo — "¿cuánto nos

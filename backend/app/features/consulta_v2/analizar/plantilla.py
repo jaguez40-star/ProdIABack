@@ -421,3 +421,49 @@ def economia(d: dict, entidad: str | None, nivel: str | None = None,
                   f"({_usdbl(ebitda_bl)} USD/BI{seg_margen}).")
     lineas.append(f"Utilidad neta (NOPAT): {_kusd(nopat)} kUSD.")
     return "\n".join(lineas)
+
+
+def tendencia(t: dict, entidad, producto: str = "CRUDO") -> str:
+    """Lectura de la serie mensual: dirección, ritmo y suavizado. `t` = analizar.tendencia.leer().
+
+    `producto` en MAYÚSCULA ("CRUDO"|"GAS"|"BLANCOS"), como lo devuelve
+    respuesta_analizar._producto_explicito. La unidad sale de _UNIDAD, no se pasa por parámetro:
+    duplicar esa tabla es como nacen las divergencias entre bbl y MSCF.
+
+    🔑 El texto NO repite la serie mes a mes — son hasta 12 cifras y la curva ya está en el
+       panel. Dice lo que la curva no puede decir sola: si sube o baja, a qué ritmo y si esa
+       dirección es de fiar.
+    """
+    scope = entidad or "Global (toda la producción ECP)"
+    pl = _PROD_L.get(producto, "crudo")
+    if not t.get("aplica"):
+        return f"📊 {scope}\n{t['texto']}"
+
+    u = _UNIDAD.get(producto, "bbl")
+    dirn, pm = t["direccion"], t["pct_mensual"]
+    rango = f"{t['primero']}–{t['ultimo']}"
+    cab = f"📊 {scope} · {pl} · {rango} ({t['n']} meses cerrados)\nTENDENCIA · "
+
+    if dirn == "estable":
+        cuerpo = (f"la producción está ESTABLE: el cambio medio es de {abs(pm)}% mensual, por "
+                  f"debajo del 1% que separa una tendencia real del ruido de operación. "
+                  f"Promedio del periodo: {_fmt(t['media'], producto)} {u}/mes.")
+    else:
+        # El signo va en la palabra, no en el número: "cae un -2.3%" es una doble negación que
+        # se lee mal. abs() en la cifra y la dirección en el verbo.
+        verbo = "sube" if dirn == "al alza" else "cae"
+        firmeza = ("de forma sostenida" if t["sostenida"]
+                   else "de forma irregular (los meses se dispersan mucho de la línea)")
+        cuerpo = (f"la producción viene {dirn.upper()}: {verbo} {abs(pm)}% al mes {firmeza}, "
+                  f"lo que a doce meses equivale a {abs(t['pct_anualizado'])}% "
+                  f"{'de crecimiento' if dirn == 'al alza' else 'de declinación'}. "
+                  f"Promedio del periodo: {_fmt(t['media'], producto)} {u}/mes.")
+
+    if any(v is not None for v in t.get("serie_mm") or []):
+        cuerpo += " La media móvil de 3 meses está en la gráfica."
+    else:
+        cuerpo += (f" No dibujo media móvil de 3 meses: hacen falta 4 meses cerrados y tengo "
+                   f"{t['n']}.")
+    # HE4 explícito: quien lee una tendencia necesita saber que el mes en curso no cuenta.
+    cuerpo += " El mes en curso NO entra: su cifra todavía es una proyección."
+    return cab + cuerpo

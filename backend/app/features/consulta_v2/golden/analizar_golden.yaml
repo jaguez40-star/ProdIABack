@@ -33,3 +33,19 @@
 - pregunta: "¿cómo va la rentabilidad de Apiay?"
   entidad: "APIAY"
   sub: economia
+
+# --- tendencia (2026-09-03, punto 2 de inteligencia de tiempo) ---
+# La cabecera de este archivo lo pide: toda corrección verificada entra aquí como regresión
+# permanente. «TENDENCIA» resolvía a `proyeccion` y respondía el pace diario del mes.
+- pregunta: "¿cuál es la tendencia de Castilla?"
+  entidad: "CASTILLA"
+  sub: tendencia
+- pregunta: "¿a qué ritmo está declinando Rubiales?"
+  entidad: "RUBIALES"
+  sub: tendencia
+- pregunta: "¿cómo viene la producción de crudo?"
+  entidad: null
+  sub: tendencia
+- pregunta: "muéstrame la media móvil de Cusiana"
+  entidad: "CUSIANA"
+  sub: tendencia
