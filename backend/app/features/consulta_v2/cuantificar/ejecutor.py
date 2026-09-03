@@ -217,6 +217,12 @@ def ejecutar_n2(resuelta: dict, slots: dict, _desempeno_fn=None) -> dict:
     if ac.get("en_curso"):
         avisos.append(f"El mes de {ac['en_curso']['nombre']} sigue en curso; su proyección NO está "
                       f"incluida en el acumulado.")
+    # [2026-09-03 · ACUM-MES-CERRADO] Un mes que falta cambia la cifra: se declara. Antes se
+    # descartaba en silencio y el rótulo seguía diciendo el rango completo.
+    if ac.get("omitidos"):
+        _om = ", ".join(ac["omitidos"])
+        avisos.append(f"No tengo cierre mensual de {_om}; {'esos meses' if len(ac['omitidos']) > 1 else 'ese mes'} "
+                      f"NO está{'n' if len(ac['omitidos']) > 1 else ''} en el acumulado.")
     if slots.get("referencia", "PPTO") != "PPTO":                      # AF-4.7: solo N1 honra la referencia
         avisos.append("Las referencias alternas (operativo/contable/promedio) por ahora solo aplican al "
                       "dato puntual de un mes; el acumulado se compara con el presupuesto (PPTO).")

@@ -238,3 +238,78 @@ def test_continuacion_ventana_no_pisa_lo_estructural():
     ctx = {"grupo": "cuantificar", "entidad": "CASTILLA", "producto": "crudo"}
     r = _continuacion("cuantos pozos tiene?", ctx)
     assert r is None or "produccion de" not in r
+
+
+# ---------------- [2026-09-03 · ACUM-MES-CERRADO] mes cerrado != reporte diario completo ------
+
+def _fake_dias_incompletos(entidad="X", segmento="ecp", nivel=None, periodo=None):
+    """Reproduce lo MEDIDO en Pruebas (CASTILLA 2026): mayo 17/31 y junio 14/30 dias de reporte
+    diario, pero AMBOS con cierre mensual y REAL cargado. Julio completo. Agosto en curso."""
+    _NUM = {"enero": 1, "febrero": 2, "marzo": 3, "abril": 4,
+            "mayo": 5, "junio": 6, "julio": 7, "agosto": 8}
+    if periodo is None:
+        return {"encontrada": True, "sin_datos": False, "sin_cierre": False,
+                "mes": {"anio": 2026, "mes": 8, "nombre": "Agosto", "completo": False}}
+    m = _NUM[periodo]
+    # (real, dias_con_data, dias_del_mes)
+    d = {1: (6907911, 31, 31), 2: (6188049, 28, 28), 3: (6813038, 31, 31), 4: (6601215, 30, 30),
+         5: (6753417, 17, 31), 6: (6179575, 14, 30), 7: (6703935, 31, 31),
+         8: (6738232, 30, 31)}[m]
+    return {"encontrada": True, "sin_datos": False, "sin_cierre": False,
+            "mes": {"anio": 2026, "mes": m, "nombre": periodo.capitalize(),
+                    "dias_con_data": d[1], "dias_del_mes": d[2], "completo": d[1] >= d[2]},
+            "por_producto": [{"producto": "CRUDO", "real": float(d[0]), "ppto": 1.0}]}
+
+
+def test_mes_pasado_con_reporte_diario_incompleto_SI_suma():
+    """🔴 REGRESIÓN. mayo (17/31) y junio (14/30) tienen cierre mensual: su REAL manda. Antes
+    `completo=False` los sacaba de la suma y el total salia 12.932.992 bbl por debajo."""
+    r = _niveles.acumulado(_ENT, "CRUDO", _desempeno_fn=_fake_dias_incompletos)
+    assert r["meses"] == ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio"]
+    assert r["real"] == 46147140.0          # los 7 meses, no 33.214.148 (5 meses)
+
+
+def test_el_mes_del_techo_sigue_siendo_en_curso():
+    """HE4 intacto: agosto (30/31, el mes del techo) NO se suma y se declara aparte."""
+    r = _niveles.acumulado(_ENT, "CRUDO", _desempeno_fn=_fake_dias_incompletos)
+    assert r["en_curso"]["nombre"] == "agosto"
+    assert "agosto" not in r["meses"]
+
+
+def test_la_curva_incluye_los_meses_de_reporte_incompleto():
+    r = _niveles.acumulado(_ENT, "CRUDO", _desempeno_fn=_fake_dias_incompletos)
+    assert [p["mes"] for p in r["serie_acum"]] == ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul"]
+    assert r["serie_acum"][-1]["real_acum"] == r["real"]
+
+
+def test_ventana_3_meses_con_dias_incompletos():
+    """El caso de la captura: ventana junio→agosto. Junio entra (cierre mensual), julio entra,
+    agosto es el del techo. Antes daba «julio (1 mes cerrado)»."""
+    res = _ejecutor.ejecutar_n2(_ENT, _slots_ven(3, "2026-06-01", "2026-08-30"),
+                                _desempeno_fn=_fake_dias_incompletos)
+    assert res["meses_cerrados"] == 2
+    assert res["periodo_label"] == "junio–julio 2026"
+
+
+def _fake_falta_un_cierre(entidad="X", segmento="ecp", nivel=None, periodo=None):
+    """Marzo SIN cierre mensual (el caso que sí justifica omitirlo)."""
+    _NUM = {"enero": 1, "febrero": 2, "marzo": 3, "abril": 4}
+    if periodo is None:
+        return {"encontrada": True, "sin_datos": False, "sin_cierre": False,
+                "mes": {"anio": 2026, "mes": 4, "nombre": "Abril", "completo": False}}
+    m = _NUM[periodo]
+    if m == 3:
+        return {"encontrada": True, "sin_datos": False, "sin_cierre": True,
+                "mes": {"anio": 2026, "mes": 3, "nombre": "Marzo", "completo": True}}
+    return {"encontrada": True, "sin_datos": False, "sin_cierre": False,
+            "mes": {"anio": 2026, "mes": m, "nombre": "X", "completo": True},
+            "por_producto": [{"producto": "CRUDO", "real": 1000.0, "ppto": 1000.0}]}
+
+
+def test_mes_sin_cierre_se_DECLARA_no_se_traga():
+    """Si un mes pasado no tiene cierre, se omite — pero se dice. Antes desaparecía sin rastro."""
+    r = _niveles.acumulado(_ENT, "CRUDO", _desempeno_fn=_fake_falta_un_cierre)
+    assert r["omitidos"] == ["marzo"]
+    res = _ejecutor.ejecutar_n2(_ENT, {"producto": "crudo", "unidad": "bbl"},
+                                _desempeno_fn=_fake_falta_un_cierre)
+    assert any("marzo" in a and "NO está" in a for a in res["avisos"])

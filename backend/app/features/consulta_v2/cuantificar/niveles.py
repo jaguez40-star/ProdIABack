@@ -36,14 +36,37 @@ def acumulado(resuelta: dict, dim_producto: str, _desempeno_fn=None, desde_mes: 
     # 🔑 HE4: solo entran los meses CERRADOS. El mes en curso queda fuera de la serie igual que
     #    queda fuera del total; meterlo aquí contradiría la regla que gobierna todo N2.
     serie_acum = []
+    # [2026-09-03 · ACUM-MES-CERRADO] Meses PASADOS que se caen de la suma (sin cierre mensual o
+    # sin fila del producto). Antes se descartaban en silencio; ahora se devuelven para que el
+    # ejecutor los declare — un mes que falta en un acumulado cambia la cifra y el usuario no
+    # tenía forma de saberlo.
+    omitidos = []
     for m in range(max(1, desde_mes), ultimo + 1):
         dm = fn(entidad=resuelta["valor"], segmento="ecp", nivel=resuelta.get("nivel"), periodo=_MESES[m])
         if not dm.get("encontrada") or dm.get("sin_datos") or dm.get("sin_cierre"):
+            if m < ultimo:
+                omitidos.append(_MESES[m])
             continue
         fila = next((p for p in dm["por_producto"] if p["producto"] == dim_producto), None)
         if not fila or (fila["real"] == 0 and fila["ppto"] == 0):
+            if m < ultimo:
+                omitidos.append(_MESES[m])
             continue
-        if dm["mes"]["completo"]:
+        # [2026-09-03 · ACUM-MES-CERRADO] 🔴 Un mes ANTERIOR al del techo está cerrado, punto: su
+        # REAL MENSUAL es la autoridad. Antes la condición era solo `dm["mes"]["completo"]`, que
+        # NO mide eso — mide la COBERTURA DEL REPORTE DIARIO (`dias_con_data >= dias_del_mes`).
+        #
+        # Medido en Pruebas (CASTILLA, 2026): mayo (17/31 días) y junio (14/30) tienen cierre
+        # mensual y REAL cargado, pero `completo=False` los sacaba de la suma Y los mandaba a la
+        # rama `en_curso`, donde el mes siguiente los pisaba. Resultado: el acumulado decía
+        # «enero–julio 2026 (5 meses cerrados) = 33.214.148 bbl» cuando el real de esos 7 meses
+        # es 46.147.140 — un 28% por debajo, sin un solo aviso y con el rótulo del rango completo.
+        #
+        # 🔑 Es el cruce de granos que `desempeno()` prohíbe expresamente (api.py, Módulo 2):
+        #    «los KPIs (REAL/cumplimiento) salen 100% de `mes`, y `día` se usa SOLO para la
+        #    curva». Gatear una suma MENSUAL con un flag DIARIO viola esa regla. `completo`
+        #    se conserva solo para el mes del techo, que es el único que puede estar en curso.
+        if m < ultimo or dm["mes"]["completo"]:
             total_real += fila["real"]
             total_ppto += (fila["ppto"] or 0)
             meses.append(_MESES[m])
@@ -61,7 +84,8 @@ def acumulado(resuelta: dict, dim_producto: str, _desempeno_fn=None, desde_mes: 
         return {"aplica": False,
                 "texto": f"«{resuelta['valor']}» aún no tiene meses cerrados en {anio} para acumular."}
     return {"aplica": True, "real": total_real, "ppto": total_ppto, "meses": meses,
-            "en_curso": en_curso, "anio": anio, "serie_acum": serie_acum}
+            "en_curso": en_curso, "anio": anio, "serie_acum": serie_acum,
+            "omitidos": omitidos}
 
 
 def _serie_puntos(resuelta: dict, dim_producto: str, fn):
