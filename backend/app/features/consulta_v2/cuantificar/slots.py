@@ -552,11 +552,25 @@ def extraer_slots(texto: str, entidad_valor: str | None = None, techo=None) -> d
     # 🔑 Solo desde N1, el default. N2/N3/N4/N1D/N1DSEL/N1DSER ya tienen dueño y NO se tocan:
     #    «el acumulado del año en los últimos 30 días» sigue siendo N2. La ventana solo reclama
     #    las preguntas que NADIE reclamó.
-    # 🔑 Solo unidad `dia`/`semana` (H5). «el último mes» / «los últimos 3 meses» piden VOLUMEN
-    #    mensual y el KPI que hoy responden es correcto; convertirlos en curva sería cambiarle
-    #    la respuesta a una forma muy común sin que nadie lo haya pedido.
+    # 🔑 Solo unidad `dia`/`semana` va a la CURVA. «el último mes» pide volumen mensual y el KPI
+    #    que hoy responde es correcto; convertirlo en curva sería cambiarle la respuesta a una
+    #    forma muy común sin que nadie lo haya pedido.
     if ventana is not None and nivel == "N1" and ventana["unidad"] in ("dia", "semana"):
         nivel = "N1DSER"
+    # [2026-09-03 · VENTANA-MESES] La ventana de VARIOS meses va a N2 (acumulado ACOTADO).
+    #
+    # Medido antes de esto: «¿cuánto produjo Castilla en los últimos 3 meses?» resolvía la
+    # ventana (jun-01 → ago-23), la declaraba en `defaults_asumidos`… y respondía el KPI de UN
+    # mes, el del techo. El usuario pedía 3 meses y recibía 1, SIN aviso — `defaults_asumidos`
+    # no se pinta en ninguna parte (verificado: 0 coincidencias en validador, _panel_datos y
+    # multitab_shell.js). Es el bug del periodo ignorado, con el agravante de que el motor SÍ
+    # sabía que eran 3 meses.
+    # 🔑 N=1 se queda en N1 a propósito: «el último mes» ES el mes del techo, y el KPI mensual
+    #    ya lo responde bien. Elevarlo a N2 lo rompería — ese mes está EN CURSO y `acumulado`
+    #    solo suma meses CERRADOS (HE4), así que devolvería «no hay meses cerrados».
+    elif (ventana is not None and nivel == "N1"
+          and ventana["unidad"] == "mes" and ventana["cantidad"] > 1):
+        nivel = "N2"
 
     per = _periodo_texto(texto)
     defaults = [f"producto={prod}", f"referencia={ref}"]

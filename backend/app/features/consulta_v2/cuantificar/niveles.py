@@ -10,10 +10,17 @@ _MESES = ["", "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "a
           "septiembre", "octubre", "noviembre", "diciembre"]
 
 
-def acumulado(resuelta: dict, dim_producto: str, _desempeno_fn=None) -> dict:
+def acumulado(resuelta: dict, dim_producto: str, _desempeno_fn=None, desde_mes: int = 1) -> dict:
     """dim_producto ∈ {"CRUDO","GAS","BLANCOS"} (nombre del producto en por_producto). Devuelve
     {aplica:True, real, ppto, meses:[nombres cerrados], en_curso:{nombre,real}|None, anio} o
-    {aplica:False, texto}. Solo rama A; la rama B la rechaza el ejecutor."""
+    {aplica:False, texto}. Solo rama A; la rama B la rechaza el ejecutor.
+
+    `desde_mes` (1-12) acota el ARRANQUE del acumulado. [2026-09-03 · VENTANA-MESES]
+    Default 1 = enero = el YTD de siempre, byte a byte. Con 6 sale el acumulado junio→último
+    mes cerrado, que es lo que pide «los últimos 3 meses» con techo en agosto.
+    🔑 No se toca el FINAL del rango: sigue siendo el último mes con dato, y el mes EN CURSO
+       sigue quedando fuera (HE4). Acotar el inicio no relaja esa regla — solo la ventana.
+    """
     fn = _desempeno_fn or _desempeno_ep
     d0 = fn(entidad=resuelta["valor"], segmento="ecp", nivel=resuelta.get("nivel"), periodo=None)
     if not d0.get("encontrada") or d0.get("sin_datos") or d0.get("sin_cierre"):
@@ -29,7 +36,7 @@ def acumulado(resuelta: dict, dim_producto: str, _desempeno_fn=None) -> dict:
     # 🔑 HE4: solo entran los meses CERRADOS. El mes en curso queda fuera de la serie igual que
     #    queda fuera del total; meterlo aquí contradiría la regla que gobierna todo N2.
     serie_acum = []
-    for m in range(1, ultimo + 1):
+    for m in range(max(1, desde_mes), ultimo + 1):
         dm = fn(entidad=resuelta["valor"], segmento="ecp", nivel=resuelta.get("nivel"), periodo=_MESES[m])
         if not dm.get("encontrada") or dm.get("sin_datos") or dm.get("sin_cierre"):
             continue

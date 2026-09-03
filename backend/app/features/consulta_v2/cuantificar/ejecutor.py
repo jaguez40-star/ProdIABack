@@ -172,7 +172,27 @@ def ejecutar_n2(resuelta: dict, slots: dict, _desempeno_fn=None) -> dict:
     producto = slots["producto"]
     unidad = slots.get("unidad", "bbl")
 
-    ac = _niveles.acumulado(resuelta, _PROD_MAP[producto], _desempeno_fn=_desempeno_fn)
+    # [2026-09-03 · VENTANA-MESES] «los últimos N meses» acota DÓNDE EMPIEZA el acumulado.
+    # Sin ventana, `desde_mes=1` = el YTD de siempre (byte a byte el comportamiento anterior).
+    #
+    # 🔑 GUARDA DE AÑO: `acumulado` trabaja dentro de UN año (su bucle es range(...,ultimo+1)
+    #    sobre los meses de `anio`). Una ventana que cruza diciembre —«los últimos 3 meses» con
+    #    techo en febrero → ini 2025-12-01— no cabe: si la aceptáramos, sumaríamos solo el tramo
+    #    del año en curso (ene-feb) y llamaríamos a eso «los últimos 3 meses». Sería responder
+    #    otra cosa en silencio, justo el fallo que esta rama existe para cerrar. Se declina.
+    ven = slots.get("ventana") or {}
+    desde_mes = 1
+    if ven.get("unidad") == "mes" and ven.get("cantidad", 0) > 1:
+        if str(ven["ini"])[:4] != str(ven["fin"])[:4]:
+            return {"aplica": False, "texto": (
+                f"«Los últimos {ven['cantidad']} meses» cruzan el cambio de año "
+                f"({ven['ini'][:7]} a {ven['fin'][:7]}) y el acumulado que sé calcular va dentro "
+                f"de un mismo año. Puedo darte el acumulado de {ven['fin'][:4]}, o el de un mes "
+                f"concreto.")}
+        desde_mes = int(str(ven["ini"])[5:7])
+
+    ac = _niveles.acumulado(resuelta, _PROD_MAP[producto], _desempeno_fn=_desempeno_fn,
+                            desde_mes=desde_mes)
     if not ac.get("aplica"):
         return {"aplica": False, "texto": ac["texto"]}
 
@@ -187,6 +207,13 @@ def ejecutar_n2(resuelta: dict, slots: dict, _desempeno_fn=None) -> dict:
     avisos = []
     if slots.get("descargo"):
         avisos.append(slots["descargo"])
+    # [2026-09-03 · VENTANA-MESES] La ventana se DECLARA. El usuario pidió «los últimos 3 meses»
+    # y el rótulo dirá «junio–julio»: sin esta línea tendría que deducir por qué. Además el ancla
+    # es el último día CON REPORTE (~100 días detrás del reloj), no hoy.
+    if desde_mes > 1:
+        avisos.append(f"«Los últimos {ven['cantidad']} meses» cuentan hacia atrás desde "
+                      f"{ven['fin']}, el último día con reporte; el acumulado suma los meses "
+                      f"CERRADOS dentro de esa ventana.")
     if ac.get("en_curso"):
         avisos.append(f"El mes de {ac['en_curso']['nombre']} sigue en curso; su proyección NO está "
                       f"incluida en el acumulado.")

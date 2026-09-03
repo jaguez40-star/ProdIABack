@@ -36,15 +36,20 @@ def test_ventana_dias_semanas_eleva_a_n1dser(frase):
     assert extraer_slots(frase, techo=_TECHO)["nivel_temporal"] == "N1DSER"
 
 
-@pytest.mark.parametrize("frase", [
-    "cuanto produjo Castilla el ultimo mes",
-    "cuanto produjo Castilla en los ultimos 3 meses",
-])
-def test_ventana_en_meses_NO_eleva(frase):
-    """H5: «el último mes» pide volumen mensual; el KPI que responde hoy es correcto."""
-    s = extraer_slots(frase, techo=_TECHO)
+def test_ventana_de_UN_mes_no_eleva():
+    """«El último mes» ES el mes del techo y el KPI mensual ya lo responde bien. Elevarlo a N2
+    lo rompería: ese mes está EN CURSO y `acumulado` solo suma meses CERRADOS (HE4)."""
+    s = extraer_slots("cuanto produjo Castilla el ultimo mes", techo=_TECHO)
     assert s["nivel_temporal"] == "N1"
     assert s["ventana"] is not None          # se detecta, pero no manda
+
+
+def test_ventana_de_VARIOS_meses_eleva_a_n2():
+    """[2026-09-03 · VENTANA-MESES] Antes resolvía la ventana de 3 meses y respondía UN mes, sin
+    avisar. Ahora va al acumulado ACOTADO, que sí honra lo que se pidió."""
+    s = extraer_slots("cuanto produjo Castilla en los ultimos 3 meses", techo=_TECHO)
+    assert s["nivel_temporal"] == "N2"
+    assert s["ventana"]["cantidad"] == 3
 
 
 @pytest.mark.parametrize("frase,nivel", [

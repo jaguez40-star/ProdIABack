@@ -153,3 +153,60 @@ def test_panel_datos_n2_sin_serie_da_lista_vacia_no_error():
     del res["serie_acum"]
     d = _panel_datos(res)
     assert d["serie_acum"] == []
+
+
+# ---------------- [2026-09-03 · VENTANA-MESES] acumulado ACOTADO por ventana ----------------
+
+def _slots_ven(cant, ini, fin):
+    return {"producto": "crudo", "unidad": "bbl",
+            "ventana": {"unidad": "mes", "cantidad": cant, "ini": ini, "fin": fin}}
+
+
+def test_acumulado_acotado_desde_mes():
+    """desde_mes=3 arranca en marzo: marzo+abril, no enero-abril."""
+    r = _niveles.acumulado(_ENT, "CRUDO", _desempeno_fn=_fake_desempeno, desde_mes=3)
+    assert [p["mes"] for p in r["serie_acum"]] == ["Mar", "Abr"]
+    assert r["real"] == 900.0 + 1200.0
+    assert r["meses"] == ["marzo", "abril"]
+
+
+def test_acumulado_sin_desde_mes_es_el_ytd_de_siempre():
+    """No regresión: el default (1) da byte a byte el acumulado de antes."""
+    a = _niveles.acumulado(_ENT, "CRUDO", _desempeno_fn=_fake_desempeno)
+    b = _niveles.acumulado(_ENT, "CRUDO", _desempeno_fn=_fake_desempeno, desde_mes=1)
+    assert a == b and a["real"] == 4200.0
+
+
+def test_ventana_de_meses_acota_el_acumulado():
+    """🔑 EL HUECO QUE ESTO CIERRA. «Los últimos 3 meses» con techo en mayo (en curso) → la
+    ventana arranca en marzo; se acumulan los meses CERRADOS de dentro (marzo, abril)."""
+    res = _ejecutor.ejecutar_n2(_ENT, _slots_ven(3, "2026-03-01", "2026-05-15"),
+                                _desempeno_fn=_fake_desempeno)
+    assert res["aplica"] is True
+    assert res["meses_cerrados"] == 2
+    assert res["periodo_label"] == "marzo–abril 2026"
+    assert res["resultado"]["valor"] == 900.0 + 1200.0
+
+
+def test_ventana_de_meses_declara_la_ventana():
+    """Nada en silencio: el usuario pidió 3 meses y el rótulo dice «marzo–abril». Hay que unirlos."""
+    res = _ejecutor.ejecutar_n2(_ENT, _slots_ven(3, "2026-03-01", "2026-05-15"),
+                                _desempeno_fn=_fake_desempeno)
+    assert any("ltimos 3 meses" in a and "2026-05-15" in a for a in res["avisos"])
+
+
+def test_ventana_que_cruza_el_anio_se_declina_honesto():
+    """🔑 `acumulado` vive dentro de UN año. Aceptar una ventana dic→feb sumaría solo ene-feb y
+    lo llamaría «los últimos 3 meses» — responder otra cosa en silencio."""
+    res = _ejecutor.ejecutar_n2(_ENT, _slots_ven(3, "2025-12-01", "2026-02-10"),
+                                _desempeno_fn=_fake_desempeno)
+    assert res["aplica"] is False
+    assert "cruzan el cambio de año" in res["texto"]
+
+
+def test_sin_ventana_el_n2_no_declara_ventana():
+    """No regresión: el acumulado del año de siempre no gana avisos nuevos."""
+    res = _ejecutor.ejecutar_n2(_ENT, {"producto": "crudo", "unidad": "bbl"},
+                                _desempeno_fn=_fake_desempeno)
+    assert not any("cuentan hacia atr" in a for a in res["avisos"])
+    assert res["periodo_label"] == "enero–abril 2026"
