@@ -206,6 +206,48 @@ _RX_VENTANA = re.compile(
     r"|\b(\d{1,3}|[A-Z]+)\s+ULTIM[OA]S\s+(DIAS?|SEMANAS?|MESES|MES)\b"
 )
 
+# ============================================================================
+# [2026-09-03 · COMPARACION-PERIODOS] Punto 3 de inteligencia de tiempo, tipo 2.
+# ============================================================================
+# Conectores de comparación. Todos exigen DOS periodos: sin el segundo no hay comparación,
+# y adivinarlo sería justo el fallo que este bloque existe para cerrar (P1).
+_CMP_CONECTOR = r"(?:VS|VERSUS|CONTRA|FRENTE\s+A|COMPARAD[OA]\s+CON|COMPARADO\s+A|RESPECTO\s+A)"
+
+# [2026-09-03 · fix] «COMPARA julio CON mayo» / «compárame julio con mayo». Aquí el conector
+# real es CON, no el verbo — pero CON suelto NO puede entrar en _CMP_CONECTOR: es de las
+# preposiciones más comunes del español («producción CON corte a agosto», «campos CON meta»)
+# y partiría por ahí frases que no comparan nada. Solo cuenta como conector cuando el texto
+# trae delante el VERBO comparar, que es lo que convierte ese CON en «A contra B».
+# 🔑 COMPARA\w* cubre compara / comparame / comparemos, y NO pisa a COMPARADO CON, que ya
+#    tiene su propia entrada arriba y se resuelve antes de llegar aquí.
+_RX_CMP_VERBO = re.compile(r"\bCOMPARA\w*\b")
+_RX_CMP_CON = re.compile(r"\bCON\b")
+
+# 🔴 P4 — GUARDA. "VS EL PROMEDIO" / "CONTRA EL PROMEDIO" / "RESPECTO AL PROMEDIO" ya son el
+# detector de REFERENCIA (:81) y hoy resuelven bien a N1 con referencia=promedio_anio. Lo mismo
+# vale para el presupuesto y sus escenarios: «¿cómo va Castilla vs el presupuesto?» es la
+# pregunta N1 de toda la vida. Si el conector va seguido de una REFERENCIA en vez de un
+# PERIODO, esto NO es una comparación de periodos y el detector se aparta.
+# 🔑 Se mira lo que sigue al conector, no si la palabra aparece en la frase: «julio vs junio
+#    contra el presupuesto» tiene las dos cosas y sí es una comparación de periodos.
+_RX_CMP_NO = re.compile(
+    _CMP_CONECTOR + r"\s+(?:EL\s+|LA\s+|AL\s+|LOS\s+|SU\s+)?"
+    r"(?:PROMEDIO|PPTO|PRESUPUESTO|META|P50|OPERATIVO|CONTABLE|PROGRAMA|PLAN)\b")
+
+# Periodo RELATIVO como segundo término: «julio vs el mes pasado», «vs el año pasado».
+_RX_CMP_MES_PASADO = re.compile(r"\b(?:EL\s+)?MES\s+(?:PASADO|ANTERIOR)\b")
+_RX_CMP_ANIO_PASADO = re.compile(
+    r"\b(?:EL\s+)?(?:MISMO\s+MES\s+DEL\s+)?ANO\s+(?:PASADO|ANTERIOR)\b"
+    r"|\bMISMO\s+MES\s+DE\s+20\d\d\b|\bINTERANUAL\b")
+
+# 🔴 P13 — Número → nombre canónico, EXPLÍCITO. NO se puede indexar `_MESES` (:84) para esto:
+# es una lista desde CERO y además trae "setiembre" como segunda grafía de septiembre, así que
+# `_MESES[7]` es "agosto" (desplazado uno) y de septiembre en adelante todo queda corrido.
+# `_MESES_NUM` tampoco vale invertido sin más: dos claves apuntan al 9.
+_MES_NOMBRE = {1: "enero", 2: "febrero", 3: "marzo", 4: "abril", 5: "mayo", 6: "junio",
+               7: "julio", 8: "agosto", 9: "septiembre", 10: "octubre", 11: "noviembre",
+               12: "diciembre"}
+
 # Techo de cordura. Una ventana de 4 dígitos («los últimos 9999 días») no es una pregunta
 # real: es ruido o un intento de forzar una consulta gigante. Se rechaza devolviendo None
 # (→ rechazo honesto) en vez de resolver una ventana absurda y consultar 27 años de serie.
@@ -315,7 +357,11 @@ def menciona_dia(texto: str) -> bool:
     #    siempre: la ventana funcionaría en los tests —donde el techo se pasa a mano— y NO en
     #    producción. Es literalmente el bug que :230-236 documenta para la serie diaria.
     #    Se usa el CENTINELA, igual que arriba: solo importa si resuelve o no, no qué fecha sale.
-    return detectar_ventana(texto, TECHO_CENTINELA) is not None
+    if detectar_ventana(texto, TECHO_CENTINELA) is not None:
+        return True
+    # 🔑 [2026-09-03] La COMPARACIÓN también necesita techo (fija el año por defecto y el mes
+    #    ancla de «vs el mes pasado»). Mismo motivo, misma solución que la ventana de arriba.
+    return detectar_comparacion(texto, TECHO_CENTINELA) is not None
 
 
 def detectar_dia(texto: str, techo=None) -> dict | None:
@@ -539,6 +585,110 @@ def detectar_ventana(texto: str, techo=None) -> dict | None:
             "asumido": [f"ventana={cant} {uni}(s) hasta {fin.isoformat()}"]}
 
 
+def _periodo_en(fragmento: str, anio_defecto: int):
+    """('julio 2025', 7, 2025) del fragmento, o None. Fragmento = un lado de la comparación.
+
+    Devuelve la cadena LISTA para `desempeno(periodo=...)`, que entiende «mes» y «mes año»
+    (_parse_periodo, analisis/api.py:372). El año va SIEMPRE explícito: en una comparación,
+    dejarlo implícito es como se cuela un YoY que en realidad compara el mismo año consigo
+    mismo. Se declara, no se asume en silencio.
+    """
+    mes = _mes_nombrado(fragmento)
+    if mes is None:
+        return None
+    ym = re.search(r"\b(20\d\d)\b", fragmento)
+    anio = int(ym.group(1)) if ym else anio_defecto
+    return f"{_MES_NOMBRE[mes]} {anio}", mes, anio
+
+
+def detectar_comparacion(texto: str, techo=None) -> dict | None:
+    """Comparación de DOS periodos mensuales, o None. [2026-09-03 · COMPARACION-PERIODOS]
+
+    Devuelve:
+      {"clase": "meses"|"mom"|"yoy",
+       "a": "julio 2026", "mes_a": 7, "anio_a": 2026,
+       "b": "mayo 2026",  "mes_b": 5, "anio_b": 2026,
+       "asumido": [...]}
+
+    `techo` (date) = último día CON DATO, no el reloj. Fija el año por defecto y el mes de
+    referencia cuando el usuario dice «vs el mes pasado» sin nombrar el primero. Sin techo se
+    devuelve None: es preferible el rechazo honesto a inventar un ancla (misma regla que
+    `detectar_ventana`). 🔑 Módulo PURO: el techo entra por parámetro, aquí no hay BD.
+
+    🔴 Guarda P4: si al conector le sigue una REFERENCIA (promedio/presupuesto/meta/P50/…),
+       esto NO es una comparación de periodos sino la pregunta N1 de referencia, que hoy
+       funciona. Se devuelve None y el flujo sigue como siempre.
+    """
+    t = norm(texto or "")
+    if techo is None:
+        return None
+    m = re.search(_CMP_CONECTOR, t)
+    if m is None:
+        # [2026-09-03 · fix] Segundo camino: «compara julio CON mayo». El conector es el CON que
+        # va DESPUÉS del verbo comparar; sin ese verbo delante, un CON suelto no parte nada.
+        v = _RX_CMP_VERBO.search(t)
+        m = _RX_CMP_CON.search(t, v.end()) if v else None
+        if m is None:
+            return None
+    # 🔑 [2026-09-03 · fix] ANCLADA al conector encontrado (`m.start()`), no `search` sobre el
+    #    texto entero. Con `search(t)` bastaba que la palabra de referencia apareciera en
+    #    CUALQUIER parte para cancelar la comparación: «julio vs junio contra el presupuesto»
+    #    partía por VS (correcto) y luego la guarda encontraba «CONTRA EL PRESUPUESTO» más
+    #    adelante y devolvía None, matando una comparación legítima. `match` desde `m.start()`
+    #    comprueba lo que el docstring dice: qué sigue a ESTE conector, no qué hay en la frase.
+    if _RX_CMP_NO.match(t, m.start()):
+        return None                       # es una REFERENCIA, no dos periodos (P4)
+
+    izq, der = t[:m.start()], t[m.end():]
+    anio_techo = techo.year
+
+    # --- lado B (lo que va DESPUÉS del conector) -------------------------------------
+    # Se resuelve primero: es el que admite formas relativas, y de él depende cómo se lee A.
+    b_rel = None
+    if _RX_CMP_ANIO_PASADO.search(der):
+        b_rel = "yoy"
+    elif _RX_CMP_MES_PASADO.search(der):
+        b_rel = "mom"
+
+    a = _periodo_en(izq, anio_techo)
+    if a is None:
+        # Sin mes a la izquierda, el ancla es el mes del TECHO: «¿cómo vamos vs el año
+        # pasado?» = el mes del techo contra su gemelo del año anterior. Se DECLARA.
+        a = (f"{_MES_NOMBRE[techo.month]} {anio_techo}", techo.month, anio_techo)
+        a_asumido = [f"periodo A = {a[0]} (el mes del último reporte)"]
+    else:
+        a_asumido = []
+
+    if b_rel == "yoy":
+        b = (f"{_MES_NOMBRE[a[1]]} {a[2] - 1}", a[1], a[2] - 1)
+        clase = "yoy"
+    elif b_rel == "mom":
+        _m, _y = (a[1] - 1, a[2]) if a[1] > 1 else (12, a[2] - 1)
+        b = (f"{_MES_NOMBRE[_m]} {_y}", _m, _y)
+        clase = "mom"
+    else:
+        b = _periodo_en(der, anio_techo)
+        if b is None:
+            return None                   # hay conector pero no un segundo periodo → no aplica
+        clase = "yoy" if (b[1] == a[1] and b[2] != a[2]) else "meses"
+
+    if (a[1], a[2]) == (b[1], b[2]):
+        return None                       # «julio vs julio»: no hay nada que comparar
+
+    asumido = a_asumido + [f"comparacion {clase}: {a[0]} contra {b[0]}"]
+    return {"clase": clase,
+            "a": a[0], "mes_a": a[1], "anio_a": a[2],
+            "b": b[0], "mes_b": b[1], "anio_b": b[2],
+            "asumido": asumido}
+
+
+# [2026-09-03 · COMPARACION-PERIODOS] Tipo 3: la serie mensual REAL **contra el PROGRAMA**.
+# 🔴 P8 — Exige LAS DOS señales: serie (_SERIE_WORDS/_SERIE_PHRASES, que ya dan N3) Y una
+#    referencia explícita al programa. Con una sola, «la serie mensual de Castilla» dejaría de
+#    ser N3 o «vs el presupuesto» dejaría de ser N1: dos respuestas correctas rotas de golpe.
+_RX_PROGRAMA = re.compile(r"\b(?:PROGRAMA|PRESUPUESTO|PPTO|META|PLAN)\b")
+
+
 def extraer_slots(texto: str, entidad_valor: str | None = None, techo=None) -> dict:
     """Slots aterrizados. `entidad_valor` (nombre canónico ya resuelto) permite excluir sus tokens del
     grounding de producto (AF10). `periodo_texto`=None → desempeno usa el mes por defecto (último).
@@ -613,6 +763,19 @@ def extraer_slots(texto: str, entidad_valor: str | None = None, techo=None) -> d
           and ventana["unidad"] == "mes" and ventana["cantidad"] > 1):
         nivel = "N2"
 
+    # [2026-09-03 · COMPARACION-PERIODOS] Se resuelve AL FINAL, después de la ventana (P9): la
+    # comparación es la intención más específica y gana a todas. Antes de `_periodo_texto`
+    # porque ese detector solo ve UN mes y con dos nombrados devolvería el primero (P1).
+    comparacion = detectar_comparacion(texto, techo)
+    if comparacion is not None:
+        # 🔑 Comparación + ventana a la vez («los últimos 3 meses vs los 3 anteriores») NO está
+        #    soportada: se declina en el ejecutor con rechazo honesto, no se resuelve a medias.
+        nivel = "NCMP"
+    # [2026-09-03 · COMPARACION-PERIODOS] Tipo 3: serie REAL vs PROGRAMA. Exige LAS DOS señales
+    # (P8) y solo eleva desde N3 — nunca desde N1/N2/N4, que responden otra cosa.
+    elif nivel == "N3" and _RX_PROGRAMA.search(norm(texto or "")):
+        nivel = "N3P"
+
     per = _periodo_texto(texto)
     defaults = [f"producto={prod}", f"referencia={ref}"]
     # 🔑 El default «periodo=mes actual» NO se declara si hay ventana: sería una contradicción
@@ -636,6 +799,7 @@ def extraer_slots(texto: str, entidad_valor: str | None = None, techo=None) -> d
         "dia": dia,
         "serie_dia": sdia,
         "ventana": ventana,
+        "comparacion": comparacion,
         # [2026-09-03 · MTD] Solo cuando el usuario pidió el acumulado DEL MES y NO nombró cuál:
         # ahí el motor elige el mes por él (el del techo) y tiene que decirlo. Si nombró el mes
         # («el acumulado del mes de julio»), el rótulo del KPI ya dice «Julio 2026» y un aviso

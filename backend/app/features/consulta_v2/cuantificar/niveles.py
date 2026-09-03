@@ -141,3 +141,101 @@ def variacion(resuelta: dict, dim_producto: str, _desempeno_fn=None) -> dict:
         deltas.append({"de": puntos[i - 1]["mes"], "a": puntos[i]["mes"], "delta": d, "pct": pct})
     return {"aplica": True, "puntos": puntos, "deltas": deltas, "ultimo": deltas[-1],
             "anio": anio, "proyeccion_mes": proy, "mes_actual": mes_act}
+
+
+def comparacion(resuelta: dict, dim_producto: str, cmp_: dict, _desempeno_fn=None) -> dict:
+    """Los DOS periodos de una comparación, con su REAL y su PPTO. [2026-09-03 · COMPARACION]
+
+    Dos llamadas a `desempeno`, una por periodo — el mismo patrón de `acumulado` (:44), que
+    llama una vez por mes. Cero SQL nuevo: `_parse_periodo` ya entiende «julio 2025» (P2).
+
+    🔑 Los 4 argumentos van EXPLÍCITOS. `desempeno` es un endpoint FastAPI y sus defaults son
+       objetos Query(...); uno sobreviviente llegó al SQL y reventó con "cannot adapt type
+       'Query'" (analisis/api.py:504-511). Mismo criterio que :25 y ejecutor.py:111.
+    """
+    fn = _desempeno_fn or _desempeno_ep
+    out = {}
+    for lado, periodo in (("a", cmp_["a"]), ("b", cmp_["b"])):
+        d = fn(entidad=resuelta["valor"], segmento="ecp",
+               nivel=resuelta.get("nivel"), periodo=periodo)
+        if not d.get("encontrada") or d.get("sin_datos") or d.get("sin_cierre"):
+            return {"aplica": False,
+                    "texto": (f"No tengo cierre mensual de «{resuelta['valor']}» para "
+                              f"{periodo}; sin ese dato la comparación sería media verdad.")}
+        fila = next((p for p in d["por_producto"] if p["producto"] == dim_producto), None)
+        if not fila or (fila["real"] == 0 and fila["ppto"] == 0):
+            return {"aplica": False,
+                    "texto": f"«{resuelta['valor']}» no reporta {dim_producto.lower()} en {periodo}."}
+        mes = d["mes"]
+        out[lado] = {
+            "periodo": periodo, "real": fila["real"], "ppto": fila["ppto"] or 0,
+            # [MES-CERRADO, 2026-09-03] `cerrado` ≠ `completo`. `completo` mide la cobertura del
+            # reporte DIARIO; un mes ya cerrado puede tenerla incompleta (medido: CASTILLA mayo
+            # 2026, 17/31) y seguir siendo definitivo. Aquí importa si la cifra es final.
+            "cerrado": mes.get("cerrado", mes["completo"]),
+            "dias_con_data": mes.get("dias_con_data"), "dias_del_mes": mes.get("dias_del_mes"),
+            # 🔴 V2 — ¿hay reporte DIARIO de este mes? Para un periodo del año anterior el cierre
+            # mensual puede existir sin que exista la tabla diaria: ahí `dias_con_data` vale 0 y
+            # describir el mes como «0 de 31 días» sería falso sobre una cifra definitiva. Es la
+            # misma familia del bug `completo` vs `cerrado` que costó una sesión el 2026-09-03.
+            # `aplica_diario` lo dice `desempeno` desde `_ambito` (api.py:438); sin la clave se
+            # asume que NO hay, que es el lado seguro (no se afirma nada sobre días).
+            "diario_disponible": bool(d.get("aplica_diario")) and bool(mes.get("dias_con_data")),
+            "nombre": mes.get("nombre"), "anio": mes.get("anio"),
+        }
+    a, b = out["a"], out["b"]
+    delta = a["real"] - b["real"]
+    return {"aplica": True, "a": a, "b": b, "delta": delta,
+            "pct": (round(delta / b["real"] * 100.0, 1) if b["real"] else None),
+            # Cumplimiento de cada lado contra SU propio presupuesto: comparar el REAL de julio
+            # contra el PPTO de mayo no significa nada, y es el error fácil de esta pantalla.
+            "cumpl_a": (round(a["real"] / a["ppto"] * 100.0, 1) if a["ppto"] else None),
+            "cumpl_b": (round(b["real"] / b["ppto"] * 100.0, 1) if b["ppto"] else None)}
+
+
+def serie_programa(resuelta: dict, dim_producto: str, _desempeno_fn=None) -> dict:
+    """Serie mensual REAL **y PPTO** del año. [2026-09-03 · COMPARACION-PERIODOS, tipo 3]
+
+    🔴 P7 — `ritmo_mensual` trae SOLO el REAL (`WHERE es.nombre = 'REAL'`, api.py:614) y todas
+    las consultas de PPTO son de un solo mes (`WHERE m.fecha = :fin`). No existe una serie
+    mensual de presupuesto en ninguna parte, así que se construye llamando a `desempeno` una
+    vez por mes — el bucle de `acumulado` (:44-54), clonado, que lleva meses en producción.
+
+    🔑 HE4: el mes EN CURSO entra en la serie pero marcado `cerrado: False`. A diferencia del
+       acumulado —donde sumarlo falsearía un total— aquí es un punto de una curva y ocultarlo
+       dejaría un hueco al final que el usuario leería como una caída.
+    """
+    fn = _desempeno_fn or _desempeno_ep
+    d0 = fn(entidad=resuelta["valor"], segmento="ecp", nivel=resuelta.get("nivel"), periodo=None)
+    if not d0.get("encontrada") or d0.get("sin_datos") or d0.get("sin_cierre"):
+        return {"aplica": False,
+                "texto": f"No tengo serie mensual de producción para «{resuelta['valor']}»."}
+    anio, ultimo = d0["mes"]["anio"], d0["mes"]["mes"]
+    puntos, omitidos = [], []
+    for m in range(1, ultimo + 1):
+        # 🔑 [2026-09-03 · fix] El AÑO va explícito, como en `comparacion` (:+30). Con el mes a
+        #    secas («enero») el periodo queda a merced del año por defecto de `_parse_periodo`,
+        #    y en una serie que rotula «real vs programa 2026» eso es justo lo que no puede
+        #    quedar implícito. `acumulado` (:45) lo pasa sin año por herencia, no como patrón
+        #    a imitar: allí el año ya viene fijado por el propio `desempeno` sin periodo.
+        dm = fn(entidad=resuelta["valor"], segmento="ecp",
+                nivel=resuelta.get("nivel"), periodo=f"{_MESES[m]} {anio}")
+        if not dm.get("encontrada") or dm.get("sin_datos") or dm.get("sin_cierre"):
+            omitidos.append(_MESES[m]); continue
+        fila = next((p for p in dm["por_producto"] if p["producto"] == dim_producto), None)
+        if not fila or (fila["real"] == 0 and fila["ppto"] == 0):
+            omitidos.append(_MESES[m]); continue
+        puntos.append({
+            "mes": _MESES[m][:3].capitalize(), "num": m,
+            "real": fila["real"], "ppto": (fila["ppto"] or None),
+            "cumpl": (round(fila["real"] / fila["ppto"] * 100.0, 1) if fila["ppto"] else None),
+            "cerrado": (m < ultimo or dm["mes"].get("cerrado", dm["mes"]["completo"])),
+        })
+    if not puntos:
+        return {"aplica": False,
+                "texto": f"«{resuelta['valor']}» no tiene meses con cierre en {anio}."}
+    con_meta = [p for p in puntos if p["cumpl"] is not None]
+    return {"aplica": True, "puntos": puntos, "anio": anio, "omitidos": omitidos,
+            "cumpl_medio": (round(sum(p["cumpl"] for p in con_meta) / len(con_meta), 1)
+                            if con_meta else None),
+            "meses_bajo_meta": sum(1 for p in con_meta if p["cumpl"] < 100)}

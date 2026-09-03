@@ -64,7 +64,8 @@ def _valor_referencia(ref, fila, d, quiero, resuelta, slots, escenario_fn):
 
 def ejecutar(resuelta: dict, slots: dict, _desempeno_fn=None, _escenario_fn=None) -> dict:
     """Despacho por `slots["nivel_temporal"]`. N1 puntual · N2 acumulado · N3 serie · N4 variación ·
-    N1D fecha puntual · N1DSEL selector de día (mejor/peor)."""
+    N1D fecha puntual · N1DSEL selector de día (mejor/peor) · NCMP comparación de periodos ·
+    N3P serie real vs programa."""
     nt = slots.get("nivel_temporal")
     if nt == "N1DSER":
         return ejecutar_n1dser(resuelta, slots)
@@ -72,6 +73,10 @@ def ejecutar(resuelta: dict, slots: dict, _desempeno_fn=None, _escenario_fn=None
         return ejecutar_n1dsel(resuelta, slots)
     if nt == "N1D":
         return ejecutar_n1d(resuelta, slots)
+    if nt == "NCMP":
+        return ejecutar_ncmp(resuelta, slots, _desempeno_fn=_desempeno_fn)
+    if nt == "N3P":
+        return ejecutar_n3p(resuelta, slots, _desempeno_fn=_desempeno_fn)
     if nt == "N4":
         return ejecutar_n4(resuelta, slots, _desempeno_fn=_desempeno_fn)
     if nt == "N3":
@@ -521,5 +526,105 @@ def ejecutar_n1dsel(resuelta: dict, slots: dict, _curva_fn=None) -> dict:
         "rango": [pts[0][0].isoformat(), pts[-1][0].isoformat()],
         "referencia": None, "referencia_valor": None, "cumplimiento_pct": None, "estado": "",
         "defaults_asumidos": slots.get("defaults_asumidos", []), "avisos": avisos_sel,
+        "zoom": resuelta.get("zoom", []),
+    }
+
+
+def ejecutar_ncmp(resuelta: dict, slots: dict, _desempeno_fn=None) -> dict:
+    """NCMP: dos periodos mensuales comparados. [2026-09-03 · COMPARACION-PERIODOS, tipo 2]
+    HE6: NO fabrica un `mes` sintético — trae `a`/`b`/`delta` propios."""
+    rech = _rechazo_comun(resuelta, slots)
+    if rech:
+        return rech
+    cmp_ = slots.get("comparacion")
+    if not cmp_:
+        return {"aplica": False, "texto": "No identifiqué los dos periodos que quieres comparar."}
+    # 🔑 P9: comparación + ventana a la vez no está soportada. Se DECLINA en vez de resolver una
+    #    de las dos y callarse la otra — que es el fallo que este plan entero viene a cerrar.
+    if slots.get("ventana"):
+        return {"aplica": False, "texto": (
+            "Puedo comparar dos meses concretos, o darte una ventana móvil, pero todavía no las "
+            "dos cosas a la vez. Dime los dos meses que quieres comparar.")}
+    producto = slots["producto"]
+    unidad = slots.get("unidad", "bbl")
+    c = _niveles.comparacion(resuelta, _PROD_MAP[producto], cmp_, _desempeno_fn=_desempeno_fn)
+    if not c.get("aplica"):
+        return {"aplica": False, "texto": c["texto"]}
+
+    a, b = c["a"], c["b"]
+    _ETIQ = {"yoy": "interanual", "mom": "contra el mes anterior", "meses": "entre meses"}
+    avisos = []
+    if slots.get("descargo"):
+        avisos.append(slots["descargo"])
+    for lado in (a, b):
+        # HE4 explícito: comparar un mes EN CURSO contra uno cerrado no es ilegítimo, pero
+        # callarlo sí. Un mes a 30/31 días compite en desventaja y hay que decirlo.
+        # 🔴 V2 — el detalle de días SOLO si hay reporte diario. Un mes de 2025 puede tener
+        #    cierre mensual sin tabla diaria: ahí `dias_con_data` es 0 y decir «0 de 31 días»
+        #    sobre una cifra definitiva sería una afirmación falsa.
+        if not lado["cerrado"]:
+            if lado["diario_disponible"]:
+                avisos.append(f"{lado['periodo']} sigue en curso ({lado['dias_con_data']}/"
+                              f"{lado['dias_del_mes']} días): su cifra todavía es una proyección.")
+            else:
+                avisos.append(f"{lado['periodo']} todavía no está cerrado: su cifra es "
+                              f"provisional.")
+    if slots.get("referencia", "PPTO") != "PPTO":
+        avisos.append("Las referencias alternas (operativo/contable/promedio) por ahora solo "
+                      "aplican al dato puntual de un mes; la comparación usa el presupuesto.")
+
+    return {
+        "aplica": True, "grupo": "cuantificar", "variable": slots.get("variable", "produccion_crudo"),
+        "nivel": "NCMP",
+        "entidad": {"nombre": resuelta["valor"], "nivel": resuelta.get("nivel"), "fue_asumida": False},
+        "entidad_cualificada": _cualificar(resuelta),
+        "producto": producto, "referencia": "PPTO", "unidad": unidad, "grano": "mes",
+        "universo": "reporte_diario",
+        "clase": cmp_["clase"], "clase_label": _ETIQ.get(cmp_["clase"], "entre periodos"),
+        "a": a, "b": b, "delta": c["delta"], "pct": c["pct"],
+        "cumpl_a": c["cumpl_a"], "cumpl_b": c["cumpl_b"],
+        "huella": {"registros": 2, "es_proyeccion": not (a["cerrado"] and b["cerrado"])},
+        "defaults_asumidos": slots.get("defaults_asumidos", []), "avisos": avisos,
+        "zoom": resuelta.get("zoom", []),
+    }
+
+
+def ejecutar_n3p(resuelta: dict, slots: dict, _desempeno_fn=None) -> dict:
+    """N3P: la serie mensual REAL contra el PROGRAMA. [2026-09-03 · COMPARACION-PERIODOS, tipo 3]
+    HE6: contrato propio (`puntos`), sin `resultado` ni `mes`."""
+    rech = _rechazo_comun(resuelta, slots)
+    if rech:
+        return rech
+    producto = slots["producto"]
+    unidad = slots.get("unidad", "bbl")
+    s = _niveles.serie_programa(resuelta, _PROD_MAP[producto], _desempeno_fn=_desempeno_fn)
+    if not s.get("aplica"):
+        return {"aplica": False, "texto": s["texto"]}
+
+    avisos = []
+    if slots.get("descargo"):
+        avisos.append(slots["descargo"])
+    if s.get("omitidos"):
+        _om = ", ".join(s["omitidos"])
+        avisos.append(f"No tengo cierre mensual de {_om}; {'esos meses' if len(s['omitidos']) > 1 else 'ese mes'} "
+                      f"no está{'n' if len(s['omitidos']) > 1 else ''} en la serie.")
+    if s["puntos"] and not s["puntos"][-1]["cerrado"]:
+        avisos.append(f"El último punto ({s['puntos'][-1]['mes']}) es el mes en curso: "
+                      f"su cifra es una proyección, no un cierre.")
+    if any(p["ppto"] is None for p in s["puntos"]):
+        _sm = ", ".join(p["mes"] for p in s["puntos"] if p["ppto"] is None)
+        avisos.append(f"Sin presupuesto cargado en {_sm}: esos meses salen sin línea de programa.")
+
+    return {
+        "aplica": True, "grupo": "cuantificar", "variable": slots.get("variable", "produccion_crudo"),
+        "nivel": "N3P",
+        "entidad": {"nombre": resuelta["valor"], "nivel": resuelta.get("nivel"), "fue_asumida": False},
+        "entidad_cualificada": _cualificar(resuelta),
+        "producto": producto, "referencia": "PPTO", "unidad": unidad, "grano": "mes",
+        "universo": "reporte_diario",
+        "puntos": s["puntos"], "anio": s["anio"],
+        "cumpl_medio": s["cumpl_medio"], "meses_bajo_meta": s["meses_bajo_meta"],
+        "huella": {"registros": len(s["puntos"]), "es_proyeccion": False},
+        "defaults_asumidos": slots.get("defaults_asumidos", []), "avisos": avisos,
         "zoom": resuelta.get("zoom", []),
     }

@@ -55,7 +55,10 @@ _PROD_DIM = {"crudo": "CRUDO", "gas": "GAS", "blancos": "BLANCOS"}
 _PANEL_TIPO = {"N3": "cuant_serie", "N4": "cuant_var",
               "N1D": "cuant_dia_panel", "N1DSEL": "cuant_dia_panel",
               "N1DSER": "cuant_dia_panel",
-              "N2": "cuant_acum"}            # N1 -> "cuant_kpi" (Fase 3)
+              "N2": "cuant_acum",
+              # [2026-09-03 · COMPARACION-PERIODOS] NCMP = barras agrupadas de los dos periodos;
+              # N3P = la curva mensual con la línea del programa encima.
+              "NCMP": "cuant_cmp", "N3P": "cuant_serie_ppto"}   # N1 -> "cuant_kpi" (Fase 3)
 _CIERRE_RANK = "Si quieres, te lo doy por otro producto o cambiando el orden."
 # [2026-08-25] Grano día: NO es pregunta sí/no (regla H1) — un "sí" caería en el drill _AFIRM de
 # maquina_q._continuacion y devolvería un acumulado en vez de lo ofrecido aquí.
@@ -165,6 +168,16 @@ def _panel_datos(res: dict) -> dict:
     # partida y el de cierre, que desde los deltas solos no se reconstruyen.
     # NO se emite `productos`: el filete del bloque lo pone el dispatcher leyendo [data-prod] del
     # HTML (multitab_shell.js:3375) y `producto` ya viaja arriba — duplicarlo sería peso muerto.
+    # [2026-09-03 · COMPARACION-PERIODOS] Contratos propios (HE6): NCMP no tiene `resultado`
+    # ni `mes`, y N3P no tiene `serie`. Se emiten sus claves y ninguna sintética.
+    elif nivel == "NCMP":
+        d.update({"a": res["a"], "b": res["b"], "delta": res["delta"], "pct": res.get("pct"),
+                  "cumpl_a": res.get("cumpl_a"), "cumpl_b": res.get("cumpl_b"),
+                  "clase": res.get("clase"), "clase_label": res.get("clase_label")})
+    elif nivel == "N3P":
+        d.update({"puntos": res["puntos"], "anio": res["anio"],
+                  "cumpl_medio": res.get("cumpl_medio"),
+                  "meses_bajo_meta": res.get("meses_bajo_meta")})
     elif nivel == "N3":
         d.update({"serie": res["serie"], "promedio": res.get("promedio"),
                   "anio": res["anio"], "proyeccion_mes": res.get("proyeccion_mes"),
@@ -366,6 +379,10 @@ def responder(texto: str, entidad: str | None = None, usuario=None, conversation
     elif res.get("nivel") in ("N1D", "N1DSEL"):
         cierre = _CIERRE_DIA
     elif res.get("nivel") == "N2":
+        cierre = "¿Quieres el detalle de un mes puntual?"
+    elif res.get("nivel") == "NCMP":
+        cierre = "¿Quieres el detalle de uno de los dos meses?"
+    elif res.get("nivel") == "N3P":
         cierre = "¿Quieres el detalle de un mes puntual?"
     else:
         cierre = _CIERRE   # HE3

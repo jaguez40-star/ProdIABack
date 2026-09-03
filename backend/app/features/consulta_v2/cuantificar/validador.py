@@ -87,6 +87,40 @@ def formatear_cuerpo(res: dict) -> str:
             linea += f" ⚠️ {a}"
         return linea
 
+    # [2026-09-03 · COMPARACION-PERIODOS] VA ANTES de N1/N2 por la misma razón que N3/N4 (HE6):
+    # su contrato NO trae `resultado` ni `mes` — leerlos abajo reventaría con KeyError.
+    if nivel == "NCMP":
+        a, b = res["a"], res["b"]
+        subio = res["delta"] >= 0
+        pct = f" ({'+' if subio else '-'}{abs(res['pct'])}%)" if res.get("pct") is not None else ""
+        linea = (f"{res['entidad_cualificada']} produjo {fmt_valor(a['real'], prod)} {unidad} de "
+                 f"{prod} en {a['periodo']} frente a {fmt_valor(b['real'], prod)} {unidad} en "
+                 f"{b['periodo']}: {'subió' if subio else 'bajó'} "
+                 f"{fmt_valor(abs(res['delta']), prod)} {unidad}{pct} ({res['clase_label']}).")
+        # El cumplimiento de CADA lado contra SU propio presupuesto. Cruzarlos (REAL de julio vs
+        # PPTO de mayo) es el error fácil de esta pantalla y no significa nada.
+        if res.get("cumpl_a") is not None and res.get("cumpl_b") is not None:
+            linea += (f" Contra su propio presupuesto: {res['cumpl_a']}% en {a['periodo']} y "
+                      f"{res['cumpl_b']}% en {b['periodo']}.")
+        for x in res.get("avisos", []):
+            linea += f" ⚠️ {x}"
+        return linea
+
+    if nivel == "N3P":
+        n = len(res["puntos"])
+        cm = res.get("cumpl_medio")
+        linea = (f"{res['entidad_cualificada']}, {prod} contra el programa en {res['anio']}: "
+                 f"{n} mes{'es' if n != 1 else ''} con dato")
+        linea += (f", cumplimiento medio {cm}%." if cm is not None
+                  else ", sin presupuesto cargado para calcular cumplimiento.")
+        if res.get("meses_bajo_meta"):
+            k = res["meses_bajo_meta"]
+            linea += (f" {k} mes{'es' if k != 1 else ''} por debajo de la meta. ")
+        linea += " El detalle mes a mes está en la gráfica."
+        for x in res.get("avisos", []):
+            linea += f" ⚠️ {x}"
+        return linea
+
     # N1/N2 (usan resultado/referencia — solo aquí, ya descartados N3/N4):
     real = fmt_valor(res["resultado"]["valor"], prod)
     pct = f"{res['cumplimiento_pct']}%" if res.get("cumplimiento_pct") is not None else "s/d"
