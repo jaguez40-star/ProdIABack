@@ -293,12 +293,27 @@ def serie_anual_p50(anio: int = 2026) -> dict | None:
     if not rows:
         return None
     serie = [{"mes": int(r[0]), "mes_nombre": str(r[1]), "p50": float(r[2])} for r in rows]
+    # [2026-09-07 · PANEL-P50-ANUAL-V2] `meses`/`valores` son el contrato que espera el molde
+    # Plotly del proyecto (ver __cnTendMesInto). `serie` se CONSERVA: la usan el texto y los tests.
+    #
+    # 🔑 META ANUAL = el promedio de los 12 meses. NO es un dato aparte que haya que traer de otra
+    # fuente ni transcribir: el P50 anual se pacta como promedio diario del año, asi que sale de la
+    # propia serie. MEDIDO contra la BD el 2026-09-07: AVG(p50) = 735.3, que es EXACTAMENTE la
+    # "Meta 2026" de la lamina gerencial. Cero dependencias nuevas.
+    #
+    # Se redondea AQUI, una sola vez: el grafico y el texto deben decir la misma cifra.
+    valores = [p["p50"] for p in serie]
+    meta = round(sum(valores) / len(valores), 1) if valores else None
     out = {
         "anio": anio,
         "unidad": str(rows[0][3]) if rows[0][3] else "kboepd",
         "fmt": "anual",
         "fuente": str(rows[0][4]) if rows[0][4] else "core.p50_2026",
         "serie": serie,
+        "meses": [p["mes_nombre"][:3] for p in serie],
+        "valores": valores,
+        "meta": meta,
+        "producto": None,   # el P50 corporativo NO es de ningun producto (H5)
     }
     _SERIE_ANUAL_CACHE[anio] = out
     return out
@@ -307,21 +322,74 @@ def serie_anual_p50(anio: int = 2026) -> dict | None:
 def formatear_serie_anual(d: dict) -> str:
     """Cuerpo de texto para la serie anual. PURA: no toca BD ni LLM.
 
-    Dice el rango (min/max con su mes) y el cierre, que es lo que se lee de un vistazo. NO
-    calcula cumplimiento: sin real medido no hay contra que comparar.
+    [2026-09-07 · PANEL-P50-ANUAL-V2] Antes decia solo inicio/cierre/min/max — cuatro cifras
+    sueltas que no contaban NADA del comportamiento. Ahora narra la FORMA de la curva (el valle,
+    el pico, el cierre) y la situa contra la meta anual, que es la pregunta de fondo cuando
+    alguien pide "el comportamiento del P50".
+
+    NO calcula cumplimiento contra el real: la tabla no tiene real mensual (ver la cabecera de
+    serie_anual_p50). Comparar contra la meta SI es legitimo — ambas cifras salen de la misma
+    serie.
     """
     serie = d.get("serie") or []
     if not serie:
         return "No tengo la serie del P50 disponible en este momento."
     u = d.get("unidad", "kboepd")
+    anio = d.get("anio", 2026)
     lo = min(serie, key=lambda p: p["p50"])
     hi = max(serie, key=lambda p: p["p50"])
     ini, fin = serie[0], serie[-1]
-    return (f"📊 Compromiso P50 {d.get('anio', 2026)} · serie mensual\n\n"
-            f"Arranca en {_kbpe(ini['p50'])} {u} ({ini['mes_nombre'].lower()}) y cierra en "
-            f"{_kbpe(fin['p50'])} {u} ({fin['mes_nombre'].lower()}). "
-            f"El mínimo es {_kbpe(lo['p50'])} {u} en {lo['mes_nombre'].lower()} y el máximo "
-            f"{_kbpe(hi['p50'])} {u} en {hi['mes_nombre'].lower()}.")
+    meta = d.get("meta")
+
+    mes_l = lambda p: p["mes_nombre"].lower()
+    partes = [f"📊 Compromiso P50 {anio} · serie mensual\n"]
+
+    # 1) El encuadre: cuanto se compromete el año y contra que meta.
+    if meta is not None:
+        # ⟦…⟧ es el marcador de NEGRITA del chat (multitab_shell.js:7160, __cnMarcador). NO usar
+        # markdown `**`: el shell lo prohibe explicitamente (:7153) y saldria literal en pantalla.
+        partes.append(
+            f"El compromiso promedia ⟦{_kbpe(meta)} {u}⟧ en el año, que es la meta {anio}. "
+            f"No es una linea plana: oscila entre {_kbpe(lo['p50'])} y {_kbpe(hi['p50'])} {u} "
+            f"segun el mes.\n")
+    else:
+        partes.append(
+            f"El compromiso oscila entre {_kbpe(lo['p50'])} y {_kbpe(hi['p50'])} {u} "
+            f"segun el mes.\n")
+
+    # 2) La forma de la curva, que es lo que se pregunta. Se describe con los tres puntos que la
+    #    definen (arranque, valle, pico) y el cierre, en su orden cronologico real.
+    forma = (f"Arranca en {_kbpe(ini['p50'])} {u} ({mes_l(ini)}), "
+             f"cae hasta el minimo de {_kbpe(lo['p50'])} {u} en {mes_l(lo)} "
+             f"y remonta al maximo de {_kbpe(hi['p50'])} {u} en {mes_l(hi)}.")
+    # El orden valle→pico solo es cierto si el minimo llega ANTES que el maximo. Si no, se dice al
+    # reves en vez de afirmar una secuencia falsa.
+    if lo["mes"] > hi["mes"]:
+        forma = (f"Arranca en {_kbpe(ini['p50'])} {u} ({mes_l(ini)}), "
+                 f"sube al maximo de {_kbpe(hi['p50'])} {u} en {mes_l(hi)} "
+                 f"y baja al minimo de {_kbpe(lo['p50'])} {u} en {mes_l(lo)}.")
+    partes.append(forma)
+
+    # 3) El cierre, con su direccion respecto al arranque: dice si el año termina pidiendo mas o
+    #    menos de lo que pedia al empezar.
+    delta = fin["p50"] - ini["p50"]
+    if abs(delta) < 0.05:
+        cierre = f" Cierra en {_kbpe(fin['p50'])} {u} ({mes_l(fin)}), practicamente donde arranco."
+    else:
+        signo = "por debajo" if delta < 0 else "por encima"
+        cierre = (f" Cierra en {_kbpe(fin['p50'])} {u} ({mes_l(fin)}), "
+                  f"{_kbpe(abs(delta))} {u} {signo} del arranque.")
+    partes.append(cierre)
+
+    # 4) Cuantos meses piden por encima de la meta. Es la lectura operativa: donde aprieta el año.
+    if meta is not None:
+        sobre = [p for p in serie if p["p50"] > meta]
+        if sobre:
+            nombres = ", ".join(mes_l(p) for p in sobre)
+            partes.append(f"\n\nPor encima de la meta: {len(sobre)} de {len(serie)} meses "
+                          f"({nombres}).")
+
+    return "".join(partes)
 
 
 def _kbpe(n) -> str:

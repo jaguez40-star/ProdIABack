@@ -447,7 +447,41 @@ _FAKE_SERIE_ANUAL = {
               {"mes": 2, "mes_nombre": "Febrero", "p50": 741.2},
               {"mes": 3, "mes_nombre": "Marzo", "p50": 732.8},
               {"mes": 4, "mes_nombre": "Abril", "p50": 714.9}],
+    # [2026-09-07 · PANEL-P50-ANUAL-V2] Campos del contrato Plotly. `meta` = promedio de los 4
+    # valores de este fixture (733.275 -> 733.3), no la meta real del año: el fixture tiene 4
+    # meses, no 12.
+    "meses": ["Ene", "Feb", "Mar", "Abr"],
+    "valores": [744.2, 741.2, 732.8, 714.9],
+    "meta": 733.3,
+    "producto": None,
 }
+
+
+def test_p12_serie_anual_trae_contrato_plotly():
+    """[2026-09-07 · PANEL-P50-ANUAL-V2] El molde Plotly del proyecto (__cnTendMesInto) lee
+    `meses`/`valores`, no `serie`. Este test fija ese contrato contra la BD real: si alguien
+    quita esos campos, el panel deja de pintarse SIN error visible."""
+    _engine_o_skip()
+    d = _p50.serie_anual_p50()
+    assert d is not None
+    assert len(d["serie"]) == 12
+    assert len(d["meses"]) == 12 and len(d["valores"]) == 12
+    assert d["meses"][0] == "Ene" and d["meses"][-1] == "Dic"
+    assert d["valores"][0] == 744.2 and d["valores"][-1] == 733.3
+    # 🔑 La meta anual ES el promedio de los 12 meses — verificado contra la lamina gerencial
+    # ("Meta 2026 = 735,3") y contra la BD (SELECT ROUND(AVG(p50),1) -> 735.3).
+    assert d["meta"] == 735.3
+    assert d["producto"] is None
+
+
+def test_p13_texto_anual_narra_la_forma_y_la_meta():
+    """El texto debe contar el comportamiento, no solo listar cifras: valle, pico, cierre y
+    posicion frente a la meta. Antes decia solo min/max y el usuario lo rechazo por escueto."""
+    _engine_o_skip()
+    d = _p50.serie_anual_p50()
+    txt = _p50.formatear_serie_anual(d)
+    for esperado in ("735,3", "714,9", "747,0", "abril", "julio", "meta"):
+        assert esperado in txt, f"falta «{esperado}» en el texto"
 
 
 def test_p8_global_ecp_emite_panel_anual(monkeypatch):
