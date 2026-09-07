@@ -249,6 +249,81 @@ def serie_por_vp(vice: str, producto: str = "CRUDO") -> dict | None:
     return info
 
 
+# ---------------------------------------------------------------------------
+# [2026-09-07] SERIE ANUAL DEL P50 CORPORATIVO (plan PANEL-P50-ANUAL).
+# ---------------------------------------------------------------------------
+# POR QUE EXISTE: «¿como es el comportamiento del P50 para 2026?» es una pregunta por la SERIE,
+# y hasta hoy la rama global respondia la cifra de UN mes (el del corte) sin panel. La serie de
+# 12 meses vive en core.p50_2026 y nadie la leia.
+#
+# GRANO: Upstream global. La tabla NO tiene columna `real`, asi que esto es UNA sola linea --
+# sin pct, sin gap, sin chip de cumplimiento. Inventar un real para poder calcularlos seria
+# exactamente el fallo silencioso que persigue el proyecto.
+#
+# ESCALA: kboepd, la MISMA magnitud que /president rotula "kbpe" (verificado en el plan
+# P50-2026-FUENTE-VERDAD: Upstream base_p50 = 726.73 en el reporte del 2026-05-18 y 726.7 en la
+# tabla para mayo). No hay conversion.
+_SERIE_ANUAL_CACHE: dict = {}
+
+
+def serie_anual_p50(anio: int = 2026) -> dict | None:
+    """Serie mensual del compromiso P50 corporativo, desde core.p50_2026. Devuelve None si no hay
+    tabla o no hay filas — la rama global sigue respondiendo su texto, solo que sin panel.
+
+    Contrato: {"anio": int, "unidad": str, "fmt": "anual", "fuente": str,
+               "serie": [{"mes": int, "mes_nombre": str, "p50": float}, ...]}
+    """
+    if anio in _SERIE_ANUAL_CACHE:
+        return _SERIE_ANUAL_CACHE[anio]
+    # Hoy solo existe la tabla de 2026 (transcrita de la lamina). Otro anio no tiene fuente y se
+    # declina en vez de devolver una serie vacia que el panel pintaria como una linea plana.
+    if anio != 2026:
+        return None
+    try:
+        eng = get_engine()
+        with eng.connect() as c:
+            rows = c.execute(sa.text(
+                "SELECT mes, mes_nombre, p50, unidad, fuente "
+                "FROM core.p50_2026 ORDER BY mes")).fetchall()
+    except Exception:
+        # 🔑 La migracion 011 es un paso MANUAL por entorno y el pipeline no ejecuta SQL, asi que
+        # habra una ventana con el codigo desplegado y la tabla sin crear. Sin esta guarda, la
+        # rama global entera se caeria y rompería una respuesta que hoy si funciona.
+        return None
+    if not rows:
+        return None
+    serie = [{"mes": int(r[0]), "mes_nombre": str(r[1]), "p50": float(r[2])} for r in rows]
+    out = {
+        "anio": anio,
+        "unidad": str(rows[0][3]) if rows[0][3] else "kboepd",
+        "fmt": "anual",
+        "fuente": str(rows[0][4]) if rows[0][4] else "core.p50_2026",
+        "serie": serie,
+    }
+    _SERIE_ANUAL_CACHE[anio] = out
+    return out
+
+
+def formatear_serie_anual(d: dict) -> str:
+    """Cuerpo de texto para la serie anual. PURA: no toca BD ni LLM.
+
+    Dice el rango (min/max con su mes) y el cierre, que es lo que se lee de un vistazo. NO
+    calcula cumplimiento: sin real medido no hay contra que comparar.
+    """
+    serie = d.get("serie") or []
+    if not serie:
+        return "No tengo la serie del P50 disponible en este momento."
+    u = d.get("unidad", "kboepd")
+    lo = min(serie, key=lambda p: p["p50"])
+    hi = max(serie, key=lambda p: p["p50"])
+    ini, fin = serie[0], serie[-1]
+    return (f"📊 Compromiso P50 {d.get('anio', 2026)} · serie mensual\n\n"
+            f"Arranca en {_kbpe(ini['p50'])} {u} ({ini['mes_nombre'].lower()}) y cierra en "
+            f"{_kbpe(fin['p50'])} {u} ({fin['mes_nombre'].lower()}). "
+            f"El mínimo es {_kbpe(lo['p50'])} {u} en {lo['mes_nombre'].lower()} y el máximo "
+            f"{_kbpe(hi['p50'])} {u} en {hi['mes_nombre'].lower()}.")
+
+
 def _kbpe(n) -> str:
     """Miles es-CO con 1 decimal: 501716.53 -> '501.716,5'. ⚠️ NO basta `.replace(",", ".")` sobre
     un `{:,.1f}`: eso deja el separador decimal como punto y produce '501.716.5', un número

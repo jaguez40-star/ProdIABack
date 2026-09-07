@@ -147,14 +147,15 @@ def _intro(alcance: str, usuario) -> str:
 def _responder_core(texto: str, entidad: str | None = None, usuario=None, conversation_id=None,
                      _ejecutivo_fn=None, _diferidas_fn=None, _economia_fn=None, _split_fn=None,
                      _p50_fn=None, _vp_fn=None, _president_fn=None, _serie_fn=None,
-                     _desempeno_fn=None) -> dict:
+                     _desempeno_fn=None, _serie_anual_fn=None) -> dict:
     """Devuelve SIEMPRE {"mensaje": str, "panel": dict|None} (contrato HD4, patrón jerarquizar/
     cuantificar). `_ejecutivo_fn`/`_diferidas_fn`/`_economia_fn`/`_split_fn`/`_p50_fn`/`_vp_fn`/
-    `_president_fn`/`_serie_fn` = inyección para tests (evita BD/LLM). 3 sub-intenciones producen
-    panel: causal (tipo "analiza_foco"), referencia SOLO en su rama de vicepresidencia (tipo
-    "p50_vp", 2026-08-13) y diferidas CUANDO hay datos (tipo "analiza_dif", 2026-08-26) — el resto
-    (proyección/economía/referencia-global/referencia-declinar) va con panel=None, cada una con su
-    propia forma de respuesta."""
+    `_president_fn`/`_serie_fn`/`_serie_anual_fn` = inyección para tests (evita BD/LLM).
+    4 sub-intenciones producen panel: causal (tipo "analiza_foco"), referencia en su rama de
+    vicepresidencia (tipo "p50_vp", 2026-08-13), diferidas CUANDO hay datos (tipo "analiza_dif",
+    2026-08-26) y referencia-global CUANDO core.p50_2026 tiene la serie anual (tipo "p50_anual",
+    2026-09-07) — el resto (proyección/economía/referencia-declinar) va con panel=None, cada una
+    con su propia forma de respuesta."""
     fn = _ejecutivo_fn or _ejecutivo_ep
     dif_fn = _diferidas_fn or _diferidas.impacto_historico
     econ_fn = _economia_fn or _economia.impacto_economico
@@ -166,6 +167,9 @@ def _responder_core(texto: str, entidad: str | None = None, usuario=None, conver
     # [2026-09-03 · TENDENCIA] Inyectable como los demás `_fn`: los tests pasan una serie fija
     # y este módulo no toca BD en pruebas.
     desemp_fn = _desempeno_fn or _desempeno_ep
+    # [2026-09-07 · PANEL-P50-ANUAL] Inyectable como los demás `_fn`: los tests pasan una serie
+    # fija y este módulo no toca BD en pruebas.
+    serie_anual_fn = _serie_anual_fn or _p50.serie_anual_p50
 
     # 1) Sub-intención (determinista). Fase 3: economia YA no es stub -> se resuelve tras la entidad.
     sub = _subrouter.sub_intencion(texto)
@@ -284,22 +288,32 @@ def _responder_core(texto: str, entidad: str | None = None, usuario=None, conver
                     if s and s.get("serie"):
                         panel_ref = {"tipo": "p50_vp", "datos": s}
             else:   # nivel is None -> global ECP (REPORTE_PRESIDENT, escala kbpe)
-                info = president_fn(periodo=None)
-                if not info.get("encontrada"):
-                    cuerpo = "No tengo el compromiso P50 disponible en este momento."
+                # [2026-09-07 · PANEL-P50-ANUAL] El P50 corporativo se pacta por AÑO y la pregunta
+                # natural («¿cómo va el P50 en 2026?») es por la SERIE, no por un mes suelto. Si
+                # core.p50_2026 tiene los 12 meses se responde la serie + panel; si no (tabla sin
+                # migrar en este entorno), se cae al comportamiento anterior: la cifra del corte.
+                anual = serie_anual_fn()
+                if anual and anual.get("serie"):
+                    cuerpo = _p50.formatear_serie_anual(anual)
+                    panel_ref = {"tipo": "p50_anual", "datos": anual}
                 else:
-                    card = next((p for p in info.get("productos", [])
-                                if p.get("entidad", "").upper() == producto), None)
-                    if card is None:
-                        card = next((t for t in info.get("totales", [])
-                                    if t.get("entidad") == "Ecopetrol"), None)
-                    cuerpo = (_p50.formatear_cifra_global(card, info.get("unidad", "kbpe"),
-                                                          producto, info.get("corte"))
-                              if card else "No tengo el compromiso P50 disponible en este momento.")
+                    info = president_fn(periodo=None)
+                    if not info.get("encontrada"):
+                        cuerpo = "No tengo el compromiso P50 disponible en este momento."
+                    else:
+                        card = next((p for p in info.get("productos", [])
+                                    if p.get("entidad", "").upper() == producto), None)
+                        if card is None:
+                            card = next((t for t in info.get("totales", [])
+                                        if t.get("entidad") == "Ecopetrol"), None)
+                        cuerpo = (_p50.formatear_cifra_global(card, info.get("unidad", "kbpe"),
+                                                              producto, info.get("corte"))
+                                  if card else "No tengo el compromiso P50 disponible en este momento.")
             intro = _intro(alcance, usuario)
             mensaje = respuesta_base.envolver(intro, cuerpo, _CIERRE_PROY)
-            # D1: `panel_ref` solo se pobló en la rama `es_vp`; el global ECP sigue en None (su
-            # caso nativo es el artifact corporativo, otra fuente/otro plan).
+            # [2026-09-07] Antes: «el global ECP sigue en None». Ya NO — la rama global emite
+            # panel "p50_anual" cuando core.p50_2026 tiene la serie. La rama VP (p50_vp) no se
+            # tocó: el if/else es mutuamente excluyente.
             return {"mensaje": mensaje, "panel": panel_ref}
         # nivel NO soportado (campo/activo/gerencia/operador/fuente) -> DECLINAR. Necesita el % vs
         # PPTO del campo (R8 del plan) -> SÍ llama a `fn`, mismo patrón pulir=False del paso 4 (o
@@ -450,24 +464,31 @@ def _responder_core(texto: str, entidad: str | None = None, usuario=None, conver
 def responder(texto: str, entidad: str | None = None, usuario=None, conversation_id=None,
               _ejecutivo_fn=None, _diferidas_fn=None, _economia_fn=None, _split_fn=None,
               _p50_fn=None, _vp_fn=None, _president_fn=None, _serie_fn=None,
-              _desempeno_fn=None) -> str:
+              _desempeno_fn=None, _serie_anual_fn=None) -> str:
     """Wrapper compat: devuelve SIEMPRE un str (nunca None) — igual que antes de que `_responder_core`
-    ganara panel. Los llamadores/tests existentes que esperan `str` no se tocan."""
+    ganara panel. Los llamadores/tests existentes que esperan `str` no se tocan.
+    🔑 Reenvía CADA `_xxx_fn` una por una, igual que `responder_con_panel`: una inyección nueva
+    en `_responder_core` hay que añadirla también AQUÍ (ver la nota de ese wrapper)."""
     return _responder_core(texto, entidad=entidad, usuario=usuario, conversation_id=conversation_id,
                            _ejecutivo_fn=_ejecutivo_fn, _diferidas_fn=_diferidas_fn,
                            _economia_fn=_economia_fn, _split_fn=_split_fn,
                            _p50_fn=_p50_fn, _vp_fn=_vp_fn, _president_fn=_president_fn,
-                           _serie_fn=_serie_fn, _desempeno_fn=_desempeno_fn)["mensaje"]
+                           _serie_fn=_serie_fn, _desempeno_fn=_desempeno_fn,
+                           _serie_anual_fn=_serie_anual_fn)["mensaje"]
 
 
 def responder_con_panel(texto: str, entidad: str | None = None, usuario=None, conversation_id=None,
                         _ejecutivo_fn=None, _diferidas_fn=None, _economia_fn=None, _split_fn=None,
                         _p50_fn=None, _vp_fn=None, _president_fn=None, _serie_fn=None,
-                        _desempeno_fn=None) -> dict:
+                        _desempeno_fn=None, _serie_anual_fn=None) -> dict:
     """{"mensaje": str, "panel": dict|None} — la usa maquina_q.py (mismo contrato que
-    respuesta_cuantificar.responder / respuesta_jerarquizar.responder_cordial)."""
+    respuesta_cuantificar.responder / respuesta_jerarquizar.responder_cordial).
+    🔑 Este wrapper reenvía CADA `_xxx_fn` a `_responder_core` una por una: al añadir una
+    inyección nueva allí hay que añadirla AQUÍ TAMBIÉN, o los tests la pasan y revienta con
+    `unexpected keyword argument` (pasó el 2026-09-07 con `_serie_anual_fn`)."""
     return _responder_core(texto, entidad=entidad, usuario=usuario, conversation_id=conversation_id,
                            _ejecutivo_fn=_ejecutivo_fn, _diferidas_fn=_diferidas_fn,
                            _economia_fn=_economia_fn, _split_fn=_split_fn,
                            _p50_fn=_p50_fn, _vp_fn=_vp_fn, _president_fn=_president_fn,
-                           _serie_fn=_serie_fn, _desempeno_fn=_desempeno_fn)
+                           _serie_fn=_serie_fn, _desempeno_fn=_desempeno_fn,
+                           _serie_anual_fn=_serie_anual_fn)

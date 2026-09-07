@@ -441,8 +441,34 @@ def test_p7_declinar_sigue_sin_panel(monkeypatch):
                                 _serie_fn=lambda vice, prod: _fake_serie_gor(vice, prod))
     assert r["panel"] is None
 
-def test_p8_global_ecp_sigue_sin_panel(monkeypatch):
-    # D1: el global ECP NO produce panel (su caso nativo es el artifact corporativo, otro plan).
+_FAKE_SERIE_ANUAL = {
+    "anio": 2026, "unidad": "kboepd", "fmt": "anual", "fuente": "core.p50_2026",
+    "serie": [{"mes": 1, "mes_nombre": "Enero", "p50": 744.2},
+              {"mes": 2, "mes_nombre": "Febrero", "p50": 741.2},
+              {"mes": 3, "mes_nombre": "Marzo", "p50": 732.8},
+              {"mes": 4, "mes_nombre": "Abril", "p50": 714.9}],
+}
+
+
+def test_p8_global_ecp_emite_panel_anual(monkeypatch):
+    # [2026-09-07 · PANEL-P50-ANUAL] ANTES este test afirmaba `panel is None` para el global
+    # ECP (D1: "su caso nativo es el artifact corporativo, otro plan"). Ese plan llego: la rama
+    # global YA emite panel "p50_anual" cuando core.p50_2026 tiene la serie de 12 meses.
+    monkeypatch.setattr(_ra._resolver, "resolver_unico", lambda t: None)
+    r = _ra.responder_con_panel("cual es el p50 de crudo?",
+                                _president_fn=lambda periodo=None: {"encontrada": False},
+                                _serie_fn=lambda vice, prod: _fake_serie_gor(vice, prod),
+                                _serie_anual_fn=lambda: _FAKE_SERIE_ANUAL)
+    assert r["panel"] is not None
+    assert r["panel"]["tipo"] == "p50_anual"
+    assert len(r["panel"]["datos"]["serie"]) == 4
+    assert r["panel"]["datos"]["unidad"] == "kboepd"
+
+
+def test_p8b_global_sin_serie_anual_cae_a_la_cifra_del_corte(monkeypatch):
+    # Degradacion (H12): sin la migracion 011 aplicada en este entorno, `serie_anual_p50` devuelve
+    # None y la rama global debe seguir respondiendo la cifra del corte, SIN panel — el
+    # comportamiento previo a este plan. No puede romperse una respuesta que hoy si funciona.
     monkeypatch.setattr(_ra._resolver, "resolver_unico", lambda t: None)
     info_global = {"encontrada": True, "unidad": "kbpe", "corte": "2026-05-18",
                    "productos": [{"entidad": "Crudo", "real_mes": 501.7, "base_p50": 521.8,
@@ -450,5 +476,7 @@ def test_p8_global_ecp_sigue_sin_panel(monkeypatch):
                    "totales": []}
     r = _ra.responder_con_panel("cual es el p50 de crudo?",
                                 _president_fn=lambda periodo=None: info_global,
-                                _serie_fn=lambda vice, prod: _fake_serie_gor(vice, prod))
+                                _serie_fn=lambda vice, prod: _fake_serie_gor(vice, prod),
+                                _serie_anual_fn=lambda: None)
     assert r["panel"] is None
+    assert "521,8" in r["mensaje"] or "501,7" in r["mensaje"]

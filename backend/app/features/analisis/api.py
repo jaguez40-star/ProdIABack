@@ -2628,7 +2628,11 @@ def president(periodo: str | None = Query(None)):
     corporativa (mundo P50, NO la del fact diario). Fuente ÚNICA con BLANCOS Real/Proy/P50 + el
     'compromiso' (Reto). Sin `periodo` toma el reporte más reciente que tenga la hoja; con `periodo`
     (YYYY-MM) el más reciente de ese mes. Devuelve por entidad TODAS las medidas + cumplimiento vs P50;
-    la referencia del semáforo (P50 vs PPTO) la decide el frontend — este endpoint es agnóstico."""
+    la referencia del semáforo (P50 vs PPTO) la decide el frontend — este endpoint es agnóstico.
+    [2026-09-07] Añade `p50_respaldo`: si el reporte elegido es de 2026 y NO trae `base_p50` de
+    Upstream, esa única cifra se sirve desde `core.p50_2026` (misma escala, transcrita de la lámina
+    gerencial). Campo ADITIVO — `null` cuando el mes sí está ingerido. NO entra en `productos` ni
+    `totales` y NO lleva real: sin real medido no hay cumplimiento, y fabricarlo sería inventar."""
     eng = get_engine()
     with eng.connect() as c:
         if periodo:
@@ -2661,6 +2665,27 @@ def president(periodo: str | None = Query(None)):
             FROM core.fact_tabla_hoja WHERE hoja='REPORTE_PRESIDENT' AND reporte_id=:r"""), {"r": rid}):
             piv.setdefault(r[0], {})[r[1]] = float(r[2])
 
+        # [2026-09-07] RESPALDO del P50 global (plan P50-2026-FUENTE-VERDAD). El P50 solo entra
+        # al sistema dentro de REPORTE_PRESIDENT, asi que un mes sin reporte ingerido deja el
+        # panorama corporativo sin cifra de referencia. Cuando falta, se toma de core.p50_2026:
+        # serie de 12 meses en la MISMA escala (verificado -- Upstream base_p50 = 726.73 en el
+        # reporte del 2026-05-18 y 726.7 en la tabla para mayo).
+        # 🔑 Va como campo APARTE, no dentro de `productos`: esas cards son productos fisicos
+        # (icono, color y anillo Real/P50 por producto, multitab_shell.js:3696) y una entidad
+        # global ahi saldria gris, sin real y con cinco filas en guion.
+        # 🔑 try/except: la migracion 011 es un paso MANUAL por entorno y el pipeline no ejecuta
+        # SQL, asi que habra una ventana con el codigo desplegado y la tabla sin crear. Sin esta
+        # guarda, /president entero se caeria y rompería el panorama que hoy si funciona.
+        p50_respaldo = None
+        if fr and fr[0] and fr[0].year == 2026 and "base_p50" not in piv.get("Upstream", {}):
+            try:
+                fila = c.execute(sa.text(
+                    "SELECT p50 FROM core.p50_2026 WHERE mes = :mes"), {"mes": fr[0].month}).first()
+                if fila and fila[0] is not None:
+                    p50_respaldo = float(fila[0])
+            except Exception:
+                p50_respaldo = None      # tabla ausente -> se degrada al comportamiento actual
+
     def _card(ent):
         d = piv.get(ent, {})
         real = d.get("real_mes"); p50 = d.get("base_p50"); comp = d.get("compromiso")
@@ -2678,8 +2703,15 @@ def president(periodo: str | None = Query(None)):
 
     productos = [_card(e) for e in ["Crudo", "Gas", "Blancos"] if e in piv]
     totales = [_card(e) for e in ["Ecopetrol", "Filiales", "Upstream"] if e in piv]
+    # `p50_respaldo` es ADITIVO: ningun consumidor actual lo lee (el frontend solo mira
+    # `productos`, multitab_shell.js:5755 y :6838), asi que anadirlo no cambia ninguna pantalla.
+    # Queda servido y trazable para quien lo pinte despues. `null` cuando el mes SI esta ingerido
+    # -- es el caso normal, y significa "no hizo falta respaldo".
     return {"encontrada": True, "reporte_id": rid, "corte": corte, "unidad": "kbpe",
-            "productos": productos, "totales": totales}
+            "productos": productos, "totales": totales,
+            "p50_respaldo": ({"base_p50": p50_respaldo, "entidad": "Upstream",
+                              "mes": fr[0].month, "fuente": "core.p50_2026"}
+                             if p50_respaldo is not None else None)}
 
 
 # ---------------------------------------------------------------------------

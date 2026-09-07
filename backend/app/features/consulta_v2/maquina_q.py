@@ -601,11 +601,14 @@ def _clasificar_core(texto: str, usuario=None, conversation_id=None, log: bool =
         # ANALIZAR — envuelve analisis.ejecutivo (motor ya existente) → narrativa causal (dónde está
         # el faltante + por qué) o proyección de cierre. Los HECHOS son deterministas; el LLM solo el
         # intro cordial. responder_con_panel() devuelve {mensaje, panel} (mismo contrato que
-        # jerarquizar/cuantificar, :374-389). [2026-08-13, H5 del plan_panel_p50_vp] SOLO 2
-        # sub-intenciones producen panel: causal (tipo "analiza_foco", el acordeón de foco apilado)
-        # y referencia — pero SOLO en su rama de vicepresidencia afirmativa (tipo "p50_vp"); el
-        # resto (proyección/diferidas/economía/referencia-global/referencia-declinar) va con
-        # panel=None, cada una con su propia forma de respuesta. Solo tráfico real.
+        # jerarquizar/cuantificar, :374-389). [2026-09-07] 4 sub-intenciones producen panel:
+        # causal (tipo "analiza_foco", el acordeón de foco apilado), referencia en su rama de
+        # vicepresidencia (tipo "p50_vp", 2026-08-13), diferidas cuando hay datos (tipo
+        # "analiza_dif", 2026-08-26) y referencia-global cuando core.p50_2026 tiene la serie
+        # (tipo "p50_anual", 2026-09-07); el resto (proyección/economía/referencia-declinar) va
+        # con panel=None, cada una con su propia forma de respuesta. Solo tráfico real.
+        # 🔑 Este módulo es AGNÓSTICO al tipo: hace `panel = r.get("panel")` y lo devuelve tal
+        # cual, sin validar ni enumerar. Un tipo nuevo NO requiere tocar nada aquí.
         r = respuesta_analizar.responder_con_panel(texto, entidad=entidad, usuario=usuario,
                                                     conversation_id=conversation_id)
         if isinstance(r, dict):
