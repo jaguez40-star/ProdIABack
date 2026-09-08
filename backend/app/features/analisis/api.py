@@ -2906,6 +2906,7 @@ def president_senda(anio: int = Query(2026)):
              for m in range(1, 13)}
 
     _por_esc = {}          # {mes: {"REAL": kboepd, "OPERATIVO": kboepd}}
+    _avisos = []           # degradaciones que el consumidor DEBE poder ver, nunca en silencio
 
     with eng.connect() as c:
         # --- ECP: DATOS_MES, un solo reporte para no mezclar versiones del plan.
@@ -2980,23 +2981,40 @@ def president_senda(anio: int = Query(2026)):
         # hasta ±14,5 kboepd, erráticas en signo (no es un factor ni un desfase corregible).
         # POP Filiales es la senda de CIERRE, no el real observado, y por eso no reconcilia.
         # Además esta tabla SÍ tiene enero, que a DATOS_MES le falta en el reporte 247.
+        # 🔑 DOS consultas separadas, y no una con las cuatro columnas: la 011 (tabla + p50) y
+        # la 012 (real_ecopetrol/real_filiales) son migraciones DISTINTAS y un entorno puede
+        # tener la primera sin la segunda -- pasó en el servidor de pruebas el 2026-09-08.
+        # Con un solo SELECT, la columna ausente reventaba la consulta ENTERA y se perdía
+        # también el P50, que sí existía: el gráfico salía sin su línea de meta y el except
+        # mudo no dejaba rastro de por qué. Un dato que falta no puede llevarse por delante
+        # a los que sí están.
         if anio == 2026:
             try:
-                for r in c.execute(sa.text(
-                        "SELECT mes, p50, real_ecopetrol, real_filiales FROM core.p50_2026")):
+                for r in c.execute(sa.text("SELECT mes, p50 FROM core.p50_2026")):
                     mes = int(r[0])
-                    if mes not in meses:
-                        continue
-                    if r[1] is not None:
+                    if mes in meses and r[1] is not None:
                         meses[mes]["p50"] = float(r[1])
+            except Exception as e:
+                _avisos.append(f"P50 no disponible (core.p50_2026): {type(e).__name__}")
+
+            try:
+                for r in c.execute(sa.text(
+                        "SELECT mes, real_ecopetrol, real_filiales FROM core.p50_2026")):
+                    mes = int(r[0])
                     # Solo donde la lámina trae el desglose (ene-ago). Sep-dic quedan en NULL
                     # ahí y conservan lo que ya pusieron DATOS_MES/POP: la senda proyectada.
-                    if r[2] is not None and r[3] is not None:
-                        meses[mes]["ecopetrol"] = float(r[2])
-                        meses[mes]["filiales"] = float(r[3])
+                    if mes in meses and r[1] is not None and r[2] is not None:
+                        meses[mes]["ecopetrol"] = float(r[1])
+                        meses[mes]["filiales"] = float(r[2])
                         meses[mes]["es_real"] = True       # cerrado y transcrito de la lámina
-            except Exception:
-                pass                                       # sin P50 el gráfico pinta solo barras
+            except Exception as e:
+                # Sin la 012 el real cerrado se compone de DATOS_MES + POP Filiales, que NO
+                # reconcilia con la lámina (marzo 713,5 contra 728,0). Se sirve igual, pero
+                # el aviso viaja en la respuesta: degradar en silencio es lo que este
+                # endpoint existe para evitar.
+                _avisos.append(
+                    "Real de meses cerrados aproximado (DATOS_MES + POP Filiales): falta la "
+                    f"migración 012_p50_2026_desglose.sql en este entorno [{type(e).__name__}]")
 
     # Total apilado SOLO con las dos partes. Un total al que le falte filiales sería una barra
     # corta y creíble -- el fallo silencioso que este plan viene a cerrar.
@@ -3007,7 +3025,7 @@ def president_senda(anio: int = Query(2026)):
     serie = [meses[m] for m in range(1, 13)]
     ultimo_real = max((m["mes"] for m in serie if m["es_real"]), default=0)
     return {"anio": anio, "unidad": "kboepd", "serie": serie,
-            "ultimo_mes_real": ultimo_real,
+            "ultimo_mes_real": ultimo_real, "avisos": _avisos,
             "fuentes": {"cerrados": "core.p50_2026 · lámina (real ene-ago)",
                         "proyectados": "DATOS_MES escenario OPERATIVO + POP Filiales",
                         "p50": "core.p50_2026"}}
