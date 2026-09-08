@@ -7,6 +7,7 @@ En esta fase los grupos NO responden todavía: la salida es la clasificación tr
 H3: clasificar(log=True) — el golden runner y los pytest pasan log=False para NO contaminar
 la libreta (core.clasificacion_log registra solo tráfico real del API).
 """
+import re
 from datetime import datetime, timezone
 from datetime import date as _date
 
@@ -16,6 +17,10 @@ from app.core.db import get_engine
 from app.features.consulta_v2.normaliza import norm
 from app.features.consulta_v2.patrones import clasificar_capa1, es_anclado
 from app.features.consulta_v2.dominio import nivel_dominio
+# [2026-09-08 · DRILL-AUTOCONTENIDA] El detector de ranking (PURO), para la guarda 2 de
+# `_continuacion`. Se consulta al detector REAL en vez de duplicar su vocabulario aquí — misma
+# razón que la ventana temporal (:144-151): dos listas paralelas se desincronizan.
+from app.features.consulta_v2.cuantificar import ranking as _ranking_cont
 from app.features.consulta_v2.clasificador_llm import clasificar_capa2
 from app.features.consulta_v2 import log as _log
 from app.features.consulta_v2 import respuesta_out
@@ -39,13 +44,24 @@ GRUPO_LABEL = {"jerarquizar": "Jerarquizar", "cuantificar": "Cuantificar",
 _CTX = {}   # conversation_id -> jerarquizar: {entidad, nivel, hijos, ofrece_produccion}
             #                 -> cuantificar: {grupo, entidad, producto}  (HE2 1e + AF9 Fase 2)
 _AFIRM = {"SI", "DALE", "OK", "OKEY", "CLARO", "BUENO", "LISTO", "SIP", "VALE", "ESO", "ESA"}
+# [2026-09-08 · DRILL-AUTOCONTENIDA] +PRODUCIMOS/PRODUJIMOS/PRODUCEN/PRODUJERON. Medido: el
+# léxico solo tenía 3ª persona del singular, así que en «¿cuánto PRODUJIMOS en abril?» el único
+# indicio de producción que veía el drill era el CUANTO ambiguo — y la frase caía en el Drill N1
+# genérico como si fuera un «¿y en abril?», heredando la entidad del turno anterior. El usuario
+# preguntó por el global y recibió la cifra de RUBIALES, sin aviso (visto en la app, 2026-09-08).
 _PROD_KW = ("PRODUCCION", "PRODUJO", "PRODUCE", "PRODUCIDO",
+            "PRODUCIMOS", "PRODUJIMOS", "PRODUCEN", "PRODUJERON",
             "CUANTO", "CUANTA", "CUANTOS", "CUANTAS")
 # [2026-08-25 · QV2-HILO-DIA C6] Subconjunto de _PROD_KW SIN AMBIGÜEDAD: nombran el verbo de
 # producción en sí. "CUANTO"/"CUANTOS"/"CUANTA"/"CUANTAS" son AMBIGUOS — "cuánto produjo" es
 # producción, pero "cuántos pozos" es un CONTEO estructural. La distinción la usa el Drill N1
 # GENÉRICO de abajo (:~261) para no confundir un conteo con una consulta de producción.
-_PROD_EXPLICITO = ("PRODUCCION", "PRODUJO", "PRODUCE", "PRODUCIDO")
+# [2026-09-08 · DRILL-AUTOCONTENIDA] Las mismas conjugaciones también aquí: esta tupla es el
+# subconjunto SIN ambigüedad (nombra el verbo, no el CUANTO), y la usa `ambiguo_estructural`
+# (:315) para decidir si «cuántos X en mayo» es producción o conteo. Sin las formas del plural,
+# «cuántos campos produjeron más» parecía un conteo estructural puro.
+_PROD_EXPLICITO = ("PRODUCCION", "PRODUJO", "PRODUCE", "PRODUCIDO",
+                   "PRODUCIMOS", "PRODUJIMOS", "PRODUCEN", "PRODUJERON")
 # Pistas de que una respuesta corta es una pregunta ESTRUCTURAL con pronombre elidido ("¿a qué
 # activo pertenece?", "¿sus campos?") → se refiere a la entidad del contexto.
 _ESTRUCT_KW = ("PERTENECE", "ACTIVO", "ACTIVOS", "GERENCIA", "GERENCIAS", "VICEPRESIDENCIA",
@@ -85,6 +101,13 @@ _MESES_NOMBRE = ("", "enero", "febrero", "marzo", "abril", "mayo", "junio", "jul
 # Marcadores de "mes EN CURSO" explícito: si el usuario los dice, quiere HOY, no el mes de la
 # conversación — no se le debe imponer el mes heredado encima de una petición explícita.
 _MES_ACTUAL_KW = ("ESTE MES", "MES ACTUAL", "MES EN CURSO", "PASADO", "ANTERIOR")
+
+# [2026-09-08 · DRILL-AUTOCONTENIDA] Verbo de producción en 1ª persona del PLURAL: la marca de
+# que la pregunta trae su propio sujeto (nosotros = Ecopetrol) y por tanto NO es una continuación
+# que deba heredar la entidad del turno anterior. Ver la guarda 1 en `_continuacion`.
+# 🔑 PRODU[CJ]: el pretérito cambia la raíz (produJimos). Con PRODUC\w* a secas, «produjimos»
+#    no matchea — verificado.
+_RX_SUJETO_PROPIO = re.compile(r"\bPRODU[CJ]IMOS\b")
 
 
 def _periodo_ctx_de(datos: dict):
@@ -130,6 +153,42 @@ def _continuacion(texto, ctx):
     # Va ANTES de TODAS las ramas (incluida la de ranking y la de analizar, que cortan con
     # return propio) porque ninguna debe verlas primero.
     if capacidades.detectar(texto, False) is not None:
+        return None
+    # [2026-09-08 · DRILL-AUTOCONTENIDA] GUARDA 1 · PREGUNTA CON SUJETO PROPIO.
+    # «¿cuánto PRODUCIMOS hoy?» / «¿cuánto PRODUJIMOS en abril?» no continúan nada: el usuario
+    # cambió de tema y preguntó por el GLOBAL. Medido en la app (2026-09-08), con el ctx de
+    # jerarquizar que dejó el turno anterior: la frase caía en la rama `ofrece_produccion` de
+    # abajo, que SUSTITUYE el texto por «produccion de RUBIALES» — y el usuario recibía DOS
+    # respuestas equivocadas de una vez: la entidad (Rubiales en vez del global) y el mes
+    # (septiembre en vez de abril, porque "abril" desaparecía con el texto). Con ctx de
+    # cuantificar pasaba lo mismo por el Drill N1 genérico. Esta guarda va ARRIBA y cubre ambos.
+    # 🔑 La 1ª persona del PLURAL es el discriminador, y no es un detalle gramatical: "producimos"
+    #    tiene sujeto propio —nosotros, Ecopetrol— mientras que "produjo" lo tiene elidido y por
+    #    eso SÍ admite heredarlo del contexto. «¿y cuánto produjo en mayo?» sigue heredando.
+    # 🔑 Mismo patrón que la guarda de capacidades de arriba: `return None` temprano, para que la
+    #    frase viaje ENTERA al clasificador y se resuelva sola. No se reescribe nada.
+    if _RX_SUJETO_PROPIO.search(t):
+        return None
+    # [2026-09-08 · DRILL-AUTOCONTENIDA] GUARDA 2 · RANKING AUTOCONTENIDO.
+    # «¿cuáles campos produjeron más hoy?» es un ranking completo, no una continuación. Sin esta
+    # guarda matcheaba CAMPOS y CUAL en _ESTRUCT_KW, ninguna rama previa la capturaba y caía en la
+    # rama ESTRUCTURAL (:338) -> «que es RUBIALES»: el usuario pedía un ranking y recibía la ficha
+    # jerárquica de un campo. Es EXACTAMENTE el síntoma que la guarda de capacidades documenta
+    # arriba (:127-129), entrando por otra puerta.
+    # 🔑 La asimetría que delató la causa: la MISMA pregunta con «en agosto» (6 tokens) ya devolvía
+    #    None — pero solo por pasar el corte de longitud de :180, no porque el drill la entendiera.
+    #    Correcta por accidente. Esta guarda la hace correcta por contrato.
+    # 🔑 Se consulta al DETECTOR REAL (puro, ranking.py:119-201), no a una lista de palabras
+    #    paralela. Es la lección de la ventana temporal en :144-151: «Un detector, dos
+    #    consumidores». Y NO basta con «¿menciona CAMPOS?»: «produjo el campo en mayo» menciona
+    #    CAMPO y SÍ debe heredar (test_cuantificar_dia.py:735); para esa frase el detector da None.
+    # 🔑 EXCEPTO en una conversación de ANALIZAR. Su cierre ofrece literalmente «¿Quieres ver qué
+    #    campos explican el faltante?»; el usuario responde con esa frase, y el detector de
+    #    ranking la reconoce (ve "campos" + "faltante"). Medido: sin esta excepción se cortaba y
+    #    perdía la entidad — hoy el drill de analizar (:225) la reescribe bien. El ctx de
+    #    jerarquizar no lleva clave "grupo" y el de cuantificar dice "cuantificar": en ambos la
+    #    guarda aplica, que es donde hace falta.
+    if ctx.get("grupo") != "analizar" and _ranking_cont.detectar(texto) is not None:
         return None
     ent = respuesta_jerarquizar.entidad_en(texto)      # ¿nombra una entidad (hijo o cualquiera)?
     # Excepción de longitud: una continuación de serie/variación que NO nombra entidad hereda la del
