@@ -307,8 +307,8 @@ def calcular(slots: dict, _engine=None, campos_scope: set | None = None) -> dict
         return {"aplica": False, "texto": slots.get("diferido", "Ese ranking no está soportado.")}
     prod = slots.get("producto", "crudo")
     prod_es = _PROD_MAP.get(prod, "CRUDO")
-    from app.core.unidades import UNIDAD as _UNIDAD_BEQ     # [BEQ-2026-09-08] antes hardcodeaba MSCF/bbl
-    unidad = _UNIDAD_BEQ
+    from app.core.unidades import unidad_de as _unidad_de   # [BEQ-2026-09-08] antes hardcodeaba MSCF/bbl
+    unidad = _unidad_de(prod_es)                            # kbopd liquidos · kbepd gas
     metrica, direccion, top_n = slots["metrica"], slots["direccion"], slots["top_n"]
     plural = _NIVEL_PLURAL[nivel]
     scope_label = slots.get("scope_label")   # p.ej. "el Activo CASTILLA"; None = ranking global

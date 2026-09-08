@@ -37,10 +37,17 @@ def test_kboepd_dia_convierte_y_escala():
     assert u.kboepd_dia(498_900.0, "CRUDO") == pytest.approx(498.9)
 
 
-def test_unidad_es_kboepd_y_no_mscf():
-    """Revierte la decision del 2026-07-21 (D3)."""
-    assert u.UNIDAD == "kboepd"
-    assert set(u.UNIDADES_PRODUCTO.values()) == {"kboepd"}
+def test_unidad_por_producto_no_mscf():
+    """Liquidos en kbopd, gas en kbepd. Revierte la decision del 2026-07-21 (D3).
+
+    Los liquidos NO son "equivalentes": solo el gas se convierte con el 5,7.
+    """
+    assert u.UNIDADES_PRODUCTO == {"CRUDO": "kbopd", "GAS": "kbepd", "BLANCOS": "kbopd"}
+    assert u.unidad_de("CRUDO") == "kbopd"
+    assert u.unidad_de("BLANCOS") == "kbopd"
+    assert u.unidad_de("GAS") == "kbepd"
+    assert u.unidad_de("gas") == "kbepd"          # acepta minuscula
+    assert "MSCF" not in u.UNIDADES_PRODUCTO.values()
     assert u.UNIDAD_ACUM == "kbbl-eq"
     assert u.UNIDAD_DIF == "bbl-eq"
 
