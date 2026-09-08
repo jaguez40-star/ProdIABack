@@ -46,12 +46,30 @@ _CAUSAL_EXPL = ("POR QUE", "A QUE SE DEBE", "EXPLICA", "CAUSAS DE",
 #    superficie de falsos positivos sin ganar nada.
 _CUMPLIMIENTO = ("CUMPLI", "COMPROMISO")
 
+# [2026-09-08 · SENDA-DIC] Horizonte FUTURO explícito: se piden meses que aún no han ocurrido,
+# no el cierre del mes en curso. Sin esto, «¿cuánto vamos a producir hasta diciembre?» entra
+# por _PROY y se responde con el pace diario del mes actual -- ignorando "diciembre" y sonando
+# seguro. Misma familia que el bug del periodo ignorado (CLAUDE.md §6).
+# 🔑 NINGUNA entrada contiene "VAMOS A" ni "CERRAR" a secas: son de _PROY y de _TEND, y hay 4
+#    archivos de test que lo fijan -- test_analizar.py:27,30,492 («¿cómo vamos este mes?»,
+#    «¿vamos a cerrar el crudo?»), test_analizar_tendencia.py:64 («como viene Castilla, vamos
+#    a cerrar en meta») y test_p50_referencia.py:32 («vamos a llegar al p50?»). Ensanchar esta
+#    tupla con esas formas los rompe a los cuatro.
+# 🔑 "HASTA" nunca va suelto: "HASTA AHORA"/"HASTA LA FECHA" son ACUMULADO (cuantificar/
+#    slots.py:27) y robárselos rompería el YTD, que hoy funciona. Solo frases completas.
+_FUTURO = ("RESTO DEL ANO", "LO QUE QUEDA DEL ANO", "LO QUE RESTA DEL ANO",
+           "PROXIMOS MESES", "SIGUIENTES MESES", "MESES QUE VIENEN", "MESES RESTANTES",
+           "CIERRE DE ANO", "CIERRE DEL ANO", "FIN DE ANO", "FINAL DEL ANO",
+           "HASTA DICIEMBRE", "HASTA FIN DE ANO", "HASTA FINAL DE ANO",
+           "DE AQUI A DICIEMBRE", "DE AQUI A FIN DE ANO")
+
 
 def sub_intencion(texto: str) -> str:
-    """causal (default) | proyeccion | diferidas | economia | referencia | tendencia.
+    """causal (default) | proyeccion | senda | diferidas | economia | referencia | tendencia.
     Precedencia: economia/diferidas ganan (son fuentes distintas), luego TENDENCIA, luego
-    CUMPLIMIENTO+P50 sin señal causal (referencia temprana, 2026-09-08), luego proyeccion,
-    luego referencia (P50 sin señal causal explícita), luego causal."""
+    CUMPLIMIENTO+P50 sin señal causal (referencia temprana, 2026-09-08), luego SENDA
+    (horizonte futuro explícito, 2026-09-08), luego proyeccion, luego referencia (P50 sin
+    señal causal explícita), luego causal."""
     t = norm(texto or "")
     if any(k in t for k in _ECON):
         return "economia"
@@ -81,6 +99,13 @@ def sub_intencion(texto: str) -> str:
     if (any(k in t for k in _CUMPLIMIENTO) and "P50" in t
             and not any(k in t for k in _CAUSAL_EXPL)):
         return "referencia"
+    # [2026-09-08 · SENDA-DIC] DESPUÉS de _CUMPLIMIENTO y ANTES de _PROY, a propósito:
+    #   · «¿cuánto cumplimos del P50 en agosto?» -> cumplimiento, cifra ya cerrada (arriba)
+    #   · «¿cuánto vamos a producir hasta diciembre?» -> senda, meses futuros (aquí)
+    #   · «¿vamos a cerrar en meta?» -> pace del mes en curso (_PROY, abajo)
+    # Sin este orden, _PROY captura "VAMOS A" y la senda no se alcanza nunca.
+    if any(k in t for k in _FUTURO):
+        return "senda"
     if any(k in t for k in _PROY):
         return "proyeccion"
     # Debajo de proyeccion a propósito: "¿vamos a llegar al P50?" sigue siendo proyección — solo

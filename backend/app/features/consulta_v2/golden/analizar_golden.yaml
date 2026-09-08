@@ -107,3 +107,33 @@
 - pregunta: "¿Por qué no cumplimos el P50 en agosto?"
   entidad: null
   sub: causal
+
+# --- senda / horizonte futuro (2026-09-08 · SENDA-DIC) ---
+# Antes de este bloque "¿cuánto vamos a producir hasta diciembre?" entraba por _PROY y
+# respondía el pace diario del MES EN CURSO -- ignorando "diciembre", con seguridad y en
+# silencio. Los 4 primeros son la corrección; los 4 últimos son de NO-REGRESIÓN: verifican
+# que _FUTURO no le robó preguntas a proyeccion/referencia/causal.
+- pregunta: "¿Cuánto vamos a producir hasta diciembre?"
+  entidad: null
+  sub: senda
+- pregunta: "¿Cuál es la proyección para lo que queda del año?"
+  entidad: null
+  sub: senda
+- pregunta: "¿Cómo se ve el cierre de año?"
+  entidad: null
+  sub: senda
+- pregunta: "¿Qué producción esperamos los próximos meses?"
+  entidad: null
+  sub: senda
+- pregunta: "¿Cómo vamos este mes?"
+  entidad: null
+  sub: proyeccion
+- pregunta: "¿Vamos a cerrar en meta?"
+  entidad: null
+  sub: proyeccion
+- pregunta: "¿Cuánto cumplimos del P50 en agosto?"
+  entidad: null
+  sub: referencia
+- pregunta: "¿Por qué no cumplimos el P50?"
+  entidad: null
+  sub: causal

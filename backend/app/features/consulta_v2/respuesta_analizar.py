@@ -34,6 +34,7 @@ from app.features.consulta_v2.analizar import p50_referencia as _p50
 from app.features.consulta_v2.analizar import tendencia as _tendencia
 from app.features.analisis.api import president as _president_ep
 from app.features.analisis.api import desempeno as _desempeno_ep
+from app.features.analisis.api import president_senda as _president_senda_ep
 
 _s = get_settings()
 
@@ -147,10 +148,10 @@ def _intro(alcance: str, usuario) -> str:
 def _responder_core(texto: str, entidad: str | None = None, usuario=None, conversation_id=None,
                      _ejecutivo_fn=None, _diferidas_fn=None, _economia_fn=None, _split_fn=None,
                      _p50_fn=None, _vp_fn=None, _president_fn=None, _serie_fn=None,
-                     _desempeno_fn=None, _serie_anual_fn=None) -> dict:
+                     _desempeno_fn=None, _serie_anual_fn=None, _senda_fn=None) -> dict:
     """Devuelve SIEMPRE {"mensaje": str, "panel": dict|None} (contrato HD4, patrón jerarquizar/
     cuantificar). `_ejecutivo_fn`/`_diferidas_fn`/`_economia_fn`/`_split_fn`/`_p50_fn`/`_vp_fn`/
-    `_president_fn`/`_serie_fn`/`_serie_anual_fn` = inyección para tests (evita BD/LLM).
+    `_president_fn`/`_serie_fn`/`_serie_anual_fn`/`_senda_fn` = inyección para tests (evita BD/LLM).
     4 sub-intenciones producen panel: causal (tipo "analiza_foco"), referencia en su rama de
     vicepresidencia (tipo "p50_vp", 2026-08-13), diferidas CUANDO hay datos (tipo "analiza_dif",
     2026-08-26) y referencia-global CUANDO core.p50_2026 tiene la serie anual (tipo "p50_anual",
@@ -170,6 +171,9 @@ def _responder_core(texto: str, entidad: str | None = None, usuario=None, conver
     # [2026-09-07 · PANEL-P50-ANUAL] Inyectable como los demás `_fn`: los tests pasan una serie
     # fija y este módulo no toca BD en pruebas.
     serie_anual_fn = _serie_anual_fn or _p50.serie_anual_p50
+    # [2026-09-08 · SENDA-DIC] Inyectable como los demás `_fn`: los tests pasan una serie fija
+    # y este módulo no toca BD en pruebas.
+    senda_fn = _senda_fn or _president_senda_ep
 
     # 1) Sub-intención (determinista). Fase 3: economia YA no es stub -> se resuelve tras la entidad.
     sub = _subrouter.sub_intencion(texto)
@@ -460,6 +464,26 @@ def _responder_core(texto: str, entidad: str | None = None, usuario=None, conver
             }}
         return {"mensaje": mensaje, "panel": panel}
 
+    # [2026-09-08 · SENDA-DIC] Senda proyectada hasta diciembre. Va ANTES del bloque 5 y con
+    # `return` propio, igual que `tendencia`: si cayera al if/else de abajo, `senda` no
+    # matchearía "proyeccion" y aterrizaría en el `else` -> análisis causal del mes en curso,
+    # respondido con seguridad. Ese es justo el fallo que este plan viene a cerrar.
+    # 🔑 Los kwargs van EXPLÍCITOS: `president_senda` es un endpoint FastAPI y un default
+    #    Query(...) sobreviviente revienta el SQL con "cannot adapt type 'Query'"
+    #    (mismo motivo que la llamada a `desemp_fn` de arriba).
+    if sub == "senda":
+        _s = senda_fn(anio=2026)
+        _serie = (_s or {}).get("serie") or []
+        _fut = [m for m in _serie if not m.get("es_real") and m.get("total") is not None]
+        if not _fut:
+            return {"mensaje": "No tengo la senda proyectada para el resto del año.",
+                    "panel": None}
+        cuerpo = _plantilla.senda(_s, ent_valor)
+        intro = _intro(alcance, usuario)
+        mensaje = respuesta_base.envolver(
+            intro, cuerpo, "¿Quieres el detalle de un mes, o la brecha contra el P50?")
+        return {"mensaje": mensaje, "panel": None}
+
     # 5) Cuerpo determinista por sub-intención (VERBATIM de la data del ejecutivo).
     panel = None
     if sub == "proyeccion":
@@ -516,7 +540,7 @@ def _responder_core(texto: str, entidad: str | None = None, usuario=None, conver
 def responder(texto: str, entidad: str | None = None, usuario=None, conversation_id=None,
               _ejecutivo_fn=None, _diferidas_fn=None, _economia_fn=None, _split_fn=None,
               _p50_fn=None, _vp_fn=None, _president_fn=None, _serie_fn=None,
-              _desempeno_fn=None, _serie_anual_fn=None) -> str:
+              _desempeno_fn=None, _serie_anual_fn=None, _senda_fn=None) -> str:
     """Wrapper compat: devuelve SIEMPRE un str (nunca None) — igual que antes de que `_responder_core`
     ganara panel. Los llamadores/tests existentes que esperan `str` no se tocan.
     🔑 Reenvía CADA `_xxx_fn` una por una, igual que `responder_con_panel`: una inyección nueva
@@ -526,13 +550,13 @@ def responder(texto: str, entidad: str | None = None, usuario=None, conversation
                            _economia_fn=_economia_fn, _split_fn=_split_fn,
                            _p50_fn=_p50_fn, _vp_fn=_vp_fn, _president_fn=_president_fn,
                            _serie_fn=_serie_fn, _desempeno_fn=_desempeno_fn,
-                           _serie_anual_fn=_serie_anual_fn)["mensaje"]
+                           _serie_anual_fn=_serie_anual_fn, _senda_fn=_senda_fn)["mensaje"]
 
 
 def responder_con_panel(texto: str, entidad: str | None = None, usuario=None, conversation_id=None,
                         _ejecutivo_fn=None, _diferidas_fn=None, _economia_fn=None, _split_fn=None,
                         _p50_fn=None, _vp_fn=None, _president_fn=None, _serie_fn=None,
-                        _desempeno_fn=None, _serie_anual_fn=None) -> dict:
+                        _desempeno_fn=None, _serie_anual_fn=None, _senda_fn=None) -> dict:
     """{"mensaje": str, "panel": dict|None} — la usa maquina_q.py (mismo contrato que
     respuesta_cuantificar.responder / respuesta_jerarquizar.responder_cordial).
     🔑 Este wrapper reenvía CADA `_xxx_fn` a `_responder_core` una por una: al añadir una
@@ -543,4 +567,4 @@ def responder_con_panel(texto: str, entidad: str | None = None, usuario=None, co
                            _economia_fn=_economia_fn, _split_fn=_split_fn,
                            _p50_fn=_p50_fn, _vp_fn=_vp_fn, _president_fn=_president_fn,
                            _serie_fn=_serie_fn, _desempeno_fn=_desempeno_fn,
-                           _serie_anual_fn=_serie_anual_fn)
+                           _serie_anual_fn=_serie_anual_fn, _senda_fn=_senda_fn)

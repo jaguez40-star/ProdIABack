@@ -2869,6 +2869,108 @@ def president(periodo: str | None = Query(None)):
                              if p50_respaldo is not None else None)}
 
 
+@router.get("/president/senda")
+def president_senda(anio: int = Query(2026)):
+    """Senda mensual de producción del año: real cerrado + proyección hasta diciembre.
+
+    [2026-09-08 · SENDA-DIC] Reproduce la lámina gerencial "Producción Equivalente G.E."
+    (barra apilada Ecopetrol + Filiales, línea P50 encima). Responde lo que el panel hoy no
+    sabe: «¿cuánta es la proyección de producción?» más allá del mes en curso.
+
+    NADA se calcula aquí: las tres series ya están ingeridas y esto solo las une.
+      · ECP  -> DATOS_MES, escenario OPERATIVO (el plan revisado). PPTO es el presupuesto
+                congelado y NO cuadra con la lámina -- medido: 619,6 contra 733,6 en octubre.
+      · FIL  -> 'POP Filiales', fila `Total general`. Verificado: enero y febrero dan 134,2,
+                que es exactamente core.p50_2026.real_filiales de esos meses.
+      · P50  -> core.p50_2026, los 12 meses del compromiso.
+
+    🔑 UNIDADES: DATOS_MES ya viene en kboepd (calendar.md:11). 'POP Filiales' viene en bpd
+       -> /1000. Sin convertir, la barra de filiales sale 1000x y el gráfico es ilegible.
+    🔑 REPORTE: cada reporte reescribe la serie anual completa -> se toma el ÚLTIMO reporte_id,
+       no un agregado. Medido: 201 reportes, 201 filas, cero duplicados reales.
+    🔑 'POP Filiales' mezcla detalle y subtotales en la misma tabla (TOTAL HOCOL, Total Gas,
+       Total general...). Se lee `Total general` directo: sumar el detalle sin filtrar
+       contaría cada barril hasta tres veces.
+    🔑 `es_real` NO se deduce del calendario: sale de si DATOS_MES trae escenario REAL con
+       filas para ese mes. Un mes sin cerrar no tiene REAL, y el frontend lo pinta rayado.
+    """
+    eng = get_engine()
+    meses = {m: {"mes": m, "mes_nombre": MESES_ES[m], "ecopetrol": None,
+                 "filiales": None, "total": None, "p50": None, "es_real": False}
+             for m in range(1, 13)}
+
+    with eng.connect() as c:
+        # --- ECP: DATOS_MES, un solo reporte para no mezclar versiones del plan.
+        # REAL y OPERATIVO en la misma pasada: REAL marca los meses cerrados, OPERATIVO da la
+        # senda completa incluidos los futuros.
+        rid = c.execute(sa.text("""
+            SELECT reporte_id FROM core.fact_tabla_hoja
+            WHERE tabla_label = 'DATOS_MES (detalle mensual)'
+            ORDER BY reporte_id DESC LIMIT 1""")).scalar()
+        if rid:
+            for r in c.execute(sa.text("""
+                SELECT dims->>'escenario' esc,
+                       EXTRACT(MONTH FROM fecha)::int mes,
+                       SUM(valor) total
+                FROM core.fact_tabla_hoja
+                WHERE tabla_label = 'DATOS_MES (detalle mensual)'
+                  AND reporte_id = :rid
+                  AND EXTRACT(YEAR FROM fecha)::int = :anio
+                  AND dims->>'escenario' IN ('REAL', 'OPERATIVO')
+                GROUP BY 1, 2"""), {"rid": rid, "anio": anio}):
+                esc, mes, total = r[0], int(r[1]), float(r[2])
+                if mes not in meses:
+                    continue
+                if esc == "REAL":
+                    meses[mes]["es_real"] = True          # el mes tiene cierre medido
+                else:
+                    meses[mes]["ecopetrol"] = round(total, 1)
+
+        # --- FILIALES: 'POP Filiales', `Total general`, último reporte. En bpd -> /1000.
+        rid_f = c.execute(sa.text("""
+            SELECT reporte_id FROM core.fact_tabla_hoja
+            WHERE tabla_label = 'POP Filiales'
+            ORDER BY reporte_id DESC LIMIT 1""")).scalar()
+        if rid_f:
+            for r in c.execute(sa.text("""
+                SELECT EXTRACT(MONTH FROM fecha)::int mes, valor
+                FROM core.fact_tabla_hoja
+                WHERE tabla_label = 'POP Filiales'
+                  AND reporte_id = :rid
+                  AND EXTRACT(YEAR FROM fecha)::int = :anio
+                  AND dims->>'producto' = 'Total general'
+                  AND dims->>'empresa' IS NULL"""), {"rid": rid_f, "anio": anio}):
+                mes = int(r[0])
+                if mes in meses:
+                    meses[mes]["filiales"] = round(float(r[1]) / 1000.0, 1)
+
+        # --- P50. try/except porque la migración 011 es un paso MANUAL por entorno (mismo
+        # criterio que `p50_respaldo` en president()): habrá una ventana con el código
+        # desplegado y la tabla sin crear, y sin la guarda se caería el endpoint entero.
+        if anio == 2026:
+            try:
+                for r in c.execute(sa.text("SELECT mes, p50 FROM core.p50_2026")):
+                    mes = int(r[0])
+                    if mes in meses and r[1] is not None:
+                        meses[mes]["p50"] = float(r[1])
+            except Exception:
+                pass                                       # sin P50 el gráfico pinta solo barras
+
+    # Total apilado SOLO con las dos partes. Un total al que le falte filiales sería una barra
+    # corta y creíble -- el fallo silencioso que este plan viene a cerrar.
+    for m in meses.values():
+        if m["ecopetrol"] is not None and m["filiales"] is not None:
+            m["total"] = round(m["ecopetrol"] + m["filiales"], 1)
+
+    serie = [meses[m] for m in range(1, 13)]
+    ultimo_real = max((m["mes"] for m in serie if m["es_real"]), default=0)
+    return {"anio": anio, "unidad": "kboepd", "serie": serie,
+            "ultimo_mes_real": ultimo_real,
+            "fuentes": {"ecopetrol": "DATOS_MES · escenario OPERATIVO",
+                        "filiales": "POP Filiales · Total general",
+                        "p50": "core.p50_2026"}}
+
+
 # ---------------------------------------------------------------------------
 # [2026-08-25] GRANO DÍA (plan QV2-GRANO-DIA). Helpers AISLADOS y read-only: mismo criterio que
 # `escenario_mes` (AF-4.2) — reusan `_ambito` para el ámbito y NO tocan `desempeno`.

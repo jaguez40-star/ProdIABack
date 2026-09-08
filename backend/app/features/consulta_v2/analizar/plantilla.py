@@ -329,6 +329,48 @@ def proyeccion(d, entidad) -> str:
     return f"📊 {scope} · {periodo}\nPROYECCIÓN · crudo: {linea}."
 
 
+def senda(d, entidad) -> str:
+    """Senda mensual proyectada hasta diciembre, desde /president/senda.
+
+    [2026-09-08 · SENDA-DIC] Distinto contrato que `proyeccion()` (serie anual real+proyectada,
+    no pace intra-mes de un solo mes) pero MISMA forma de función: dos posicionales, devuelve
+    str, nunca None, nunca lanza. Cubre el TOTAL equivalente (Ecopetrol + Filiales), a diferencia
+    de `proyeccion()` que solo sabe de crudo.
+    🔑 `_fmt(valor, "CRUDO")` formatea cualquier kboepd por igual desde [BEQ-2026-09-08]: el
+       argumento producto ya no cambia la escala, se conserva solo por los ~20 call sites que
+       lo pasan (validador.py:20-28). No hace falta un producto real para formatear un total.
+    🔑 La UNIDAD se lee de `d["unidad"]`, NUNCA de `_UNIDAD["CRUDO"]` (= "kbopd", petróleo
+       solo): el total de esta serie es EQUIVALENTE (crudo+gas+blancos+filiales), y el propio
+       endpoint ya lo rotula "kboepd" (analisis/api.py, president_senda). Etiquetarlo "kbopd"
+       sería el mismo error silencioso que este plan existe para evitar, solo que en la unidad.
+    """
+    scope = entidad or "la producción ECP"
+    serie = (d or {}).get("serie") or []
+    futuros = [m for m in serie if not m.get("es_real") and m.get("total") is not None]
+    if not futuros:
+        return f"📊 {scope}\nNo tengo la senda proyectada para el resto del año."
+    u = (d or {}).get("unidad") or "kboepd"
+    partes = " · ".join(f"{(m.get('mes_nombre') or '').lower()} {_fmt(m['total'], 'CRUDO')}"
+                        for m in futuros)
+    linea = f"SENDA PROYECTADA · {partes} {u}."
+    # Brecha contra el P50: SOLO si TODOS los meses futuros la tienen -- a medias sería peor
+    # que callarla (regla madre: no inventar ni completar con huecos).
+    if all(m.get("p50") is not None for m in futuros):
+        p50s = " / ".join(_fmt(m["p50"], "CRUDO") for m in futuros)
+        b0 = futuros[0]["total"] - futuros[0]["p50"]
+        b1 = futuros[-1]["total"] - futuros[-1]["p50"]
+        if abs(b1) < abs(b0) - 1e-6:
+            verbo = "se estrecha"
+        elif abs(b1) > abs(b0) + 1e-6:
+            verbo = "se amplía"
+        else:
+            verbo = "se mantiene"
+        linea += (f"\nContra el compromiso P50 ({p50s}) la brecha {verbo} de "
+                  f"{_fmt(b0, 'CRUDO')} a {_fmt(b1, 'CRUDO')} {u}.")
+    anio = (d or {}).get("anio") or ""
+    return f"📊 {scope} · resto de {anio}\n{linea}"
+
+
 def diferidas(d: dict, entidad: str | None) -> str:
     """Histórico de diferidas por causa (ene-2023 → jul-2025). ROTULADO como histórico (analiza.md
     §9.3, decisión A2): NUNCA se presenta como la causa del mes en curso."""
