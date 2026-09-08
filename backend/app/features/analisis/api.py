@@ -2789,7 +2789,7 @@ def president(periodo: str | None = Query(None)):
     # `productos`, multitab_shell.js:5755 y :6838), asi que anadirlo no cambia ninguna pantalla.
     # Queda servido y trazable para quien lo pinte despues. `null` cuando el mes SI esta ingerido
     # -- es el caso normal, y significa "no hizo falta respaldo".
-    return {"encontrada": True, "reporte_id": rid, "corte": corte, "unidad": "kbpe",
+    return {"encontrada": True, "reporte_id": rid, "corte": corte, "unidad": "kboepd",   # [BEQ-2026-09-08] mismo rotulo que el resto de la app: la hoja P50 ya venia en barriles equivalentes
             "productos": productos, "totales": totales,
             "p50_respaldo": ({"base_p50": p50_respaldo, "entidad": "Upstream",
                               "mes": fr[0].month, "fuente": "core.p50_2026"}
