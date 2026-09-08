@@ -14,8 +14,12 @@ tiene `conversation_id`, no este módulo (E.5 del plan).
 
 `catalogo.get()` al importar → arranque ruidoso si el YAML está mal.
 """
+import re
+
 from app.core.config import get_settings
+from app.core import unidades as _u
 from app.features.consulta_v2 import respuesta_base
+from app.features.consulta_v2.normaliza import norm
 from app.features.consulta_v2.cuantificar import catalogo as _catalogo
 from app.features.consulta_v2.cuantificar import resolver as _resolver
 from app.features.consulta_v2.cuantificar import slots as _slots
@@ -26,6 +30,11 @@ from app.features.consulta_v2.cuantificar import ejecutor as _ejecutor
 from app.features.consulta_v2.cuantificar import validador as _validador
 from app.features.consulta_v2.cuantificar import ranking as _ranking
 from app.features.consulta_v2 import no_soportado as _no_soportado
+# [2026-09-08 · PRODUCCION-HOY-PANEL-MES] El panorama corporativo por producto sale de
+# REPORTE_PRESIDENT, no del fact diario: es la MISMA fuente que pinta el tablero, así que el
+# chat y el panorama no pueden contradecirse. Se importa el endpoint, igual que
+# respuesta_analizar.py:35 — no se replica su SQL.
+from app.features.analisis.api import president as _president_ep
 
 _catalogo.get()   # fuerza carga+validación del catálogo al importar (arranque del backend)
 _s = get_settings()
@@ -255,9 +264,141 @@ def _forma_no_soportada_ranking(texto: str):
     return f if f in _FORMAS_RECHAZO_RANKING else None
 
 
-def responder(texto: str, entidad: str | None = None, usuario=None, conversation_id=None):
+# ── [2026-09-08 · PRODUCCION-HOY-PANEL-MES] Panorama corporativo del mes en curso ─────────────
+# «¿Cuánto producimos hoy?» moría dos veces: (1) en el filtro de dominio, porque el vocabulario
+# no tenía el verbo (arreglado en vocabulario_dominio.yaml); (2) aquí, porque "hoy" dispara
+# _DIA_REL (slots.py:98) -> menciona_dia True -> la pseudo-entidad GLOBAL de :340 NO se activa
+# -> «No identifiqué una entidad». Y aunque se activara no habría dato: el reporte diario va
+# ~100 días detrás del reloj (slots.py:161-162).
+# 🔑 La respuesta correcta es la del MES EN CURSO, y el texto lo DICE. No se finge un dato
+#    diario: se sirve el que existe y se rotula. Es lo mismo que muestra el panorama.
+# 🔑 NO se tocan _DIA_REL ni menciona_dia: «¿cuánto produjo Rubiales ayer?» sigue siendo grano
+#    día y sigue funcionando. Esta rama solo actúa SIN entidad (guarda doble en `responder`).
+_RX_HOY = re.compile(r"\bHOY\b")
+# Formas EXPLÍCITAS del mes en curso. El mes NOMBRADO ("en abril") no entra: tiene su ruta.
+_RX_MES_CURSO = re.compile(
+    r"\b(?:ESTE\s+MES|DEL\s+MES|EN\s+EL\s+MES|MES\s+EN\s+CURSO|MES\s+ACTUAL|EN\s+LO\s+QUE\s+VA\s+DEL\s+MES)\b")
+# Debe nombrar la PRODUCCIÓN. «¿cuánto llevamos este mes?» a secas no la nombra y es fuera de
+# dominio por la regla del usuario (clasificacion_golden.yaml:75-76: "meta debería estar
+# acompañado del término producción") — aquí se aplica el mismo criterio. Sin VAMOS/VA:
+# «cómo vamos» es de Analizar/proyeccion y el usuario la dejó fuera a propósito.
+# 🔑 PRODU[CJ]: el pretérito cambia la raíz (produJimos, produJo). Medido: con PRODUC\w* a
+#    secas, «¿cuánto produjimos este mes?» daba False.
+_RX_VERBO_PROD = re.compile(r"\bPRODU[CJ]\w*\b|\bLLEVAMOS\s+DE\s+PRODUCCION\b")
+# 🔑 GUARDA: lo que NUNCA cae aquí aunque traiga "hoy".
+#    · sustantivo de nivel  -> la pregunta es POR ENTIDADES (ranking o grano día), no global
+#    · superlativo          -> RANKING (N5), su fork vive justo debajo
+#    · reporte/cobertura    -> huella de datos, otra pregunta
+_RX_NO_GLOBAL = re.compile(
+    r"\b(?:CAMPOS?|POZOS?|ACTIVOS?|GERENCIAS?|VICEPRESIDENCIAS?|VP|FILIALES?|OPERADORES?)\b"
+    r"|\b(?:MAS|MENOS|MAYOR|MENOR|MAYORES|MENORES|TOP|RANKING|MEJOR|PEOR|PRIMEROS?|ULTIMOS?)\b"
+    r"|\b(?:DIAS?|REPORTES?|COBERTURA|HUELLA)\b")
+
+
+def _pide_mes_en_curso(texto: str) -> bool:
+    """¿Pide el panorama corporativo del mes en curso? PURA: sin BD, sin LLM.
+
+    True solo si: (nombra la producción) Y ("hoy" O forma explícita del mes) Y NINGUNA señal de
+    entidad/ranking/cobertura. Estricta a propósito: corta ANTES del ranking y del resolver, así
+    que un falso positivo se lleva por delante una pregunta que hoy se responde bien.
+    """
+    t = norm(texto or "")
+    if _RX_NO_GLOBAL.search(t):
+        return False
+    if not _RX_VERBO_PROD.search(t):
+        return False
+    return bool(_RX_HOY.search(t) or _RX_MES_CURSO.search(t))
+
+
+_CIERRE_MES_CURSO = "¿Quieres el detalle de un producto, o la comparación contra el P50?"
+
+
+def _cuerpo_mes_en_curso(info: dict) -> str:
+    """Cifras del MES EN CURSO por producto, desde /analisis/president. PURA.
+
+    🔑 Rotula el periodo y el corte SIEMPRE. La pregunta dice "hoy" y la respuesta es del mes:
+    callar esa diferencia sería el fallo silencioso que este plan corrige.
+    🔑 Unidades y formato salen de core/unidades (unidad_de, fmt): el gas va en barriles
+    equivalentes y los blancos en líquidos; duplicar ese mapa aquí sería un gemelo más.
+    """
+    corte = info.get("corte")
+    lineas = ["📊 Ecopetrol · producción del mes en curso" + (f" · corte {corte}" if corte else ""),
+              ""]
+    for p in info.get("productos", []):
+        nombre = str(p.get("entidad", ""))
+        real = p.get("real_mes")
+        if real is None:
+            continue
+        linea = f"{nombre}: {_u.fmt(real)} {_u.unidad_de(nombre)}"
+        if p.get("cumpl_p50") is not None:
+            linea += f" · {_u.fmt(p['cumpl_p50'])}% del P50"
+        lineas.append(linea)
+    # El total nacional (Ecopetrol + filiales) cierra el cuadro: es la cifra de arriba de la
+    # lámina gerencial y la primera que el usuario compara.
+    emp = info.get("empresas") or {}
+    if emp.get("nacional") is not None:
+        tot = f"\nTotal nacional: {_u.fmt(emp['nacional'])} {_u.UNIDAD}"
+        try:
+            if emp.get("p50"):
+                tot += f" · {_u.fmt(100.0 * float(emp['nacional']) / float(emp['p50']))}% del P50"
+        except (TypeError, ValueError, ZeroDivisionError):
+            pass
+        lineas.append(tot)
+    return "\n".join(lineas)
+
+
+def _intro_global_mes(usuario) -> str:
+    """Intro fijo, sin LLM y sin cifras (REGLA CERO: el cuerpo las lleva todas).
+
+    `usuario` es el NOMBRE (string), igual que en _intro (:103, `usuario or "el usuario"`). Esta
+    rama corta antes del ejecutor y no tiene un `res` que describir; un intro fijo evita un
+    round-trip de LLM en la pregunta más frecuente del sistema.
+    """
+    nombre = str(usuario).strip() if usuario else ""
+    return (f"Con gusto, {nombre}: " if nombre else "Con gusto: ") + "así va la producción del mes en curso."
+
+
+def responder(texto: str, entidad: str | None = None, usuario=None, conversation_id=None,
+              _president_fn=None):
     """1c/1d: resuelve → cifra (ejecutor) → intro cálido + cuerpo VERBATIM + cierre (mensaje) + panel
-    KPI (o None). Devuelve SIEMPRE {mensaje, panel} — nunca None."""
+    KPI (o None). Devuelve SIEMPRE {mensaje, panel} — nunca None.
+
+    `_president_fn`: inyección para pruebas (mismo patrón que respuesta_analizar._responder_core).
+    Ningún llamador de producción lo pasa.
+    """
+    # ── [2026-09-08 · PRODUCCION-HOY-PANEL-MES] PANORAMA DEL MES EN CURSO ─────────────────────
+    # Va ANTES del ranking y del resolver, y por ese orden exacto:
+    #  🔑 Antes del RESOLVER porque la pregunta no nombra entidad — moriría en la guarda «no
+    #     identifiqué una entidad» de :342, que es justo el bug que esto corrige.
+    #  🔑 Antes del RANKING por diseño, no por necesidad: _ranking.detectar no matchea «cuánto
+    #     producimos hoy», así que el orden inverso también andaría — por casualidad. La guarda
+    #     _RX_NO_GLOBAL deja «¿cuáles campos produjeron más hoy?» fuera por contrato.
+    #  🔑 GUARDA DOBLE. `entidad` viene del backstop de maquina_q (detectar_entidad, catálogo
+    #     cerrado) y NO es quien decide: «el resolver propio de cuantificar (D-D5) es quien
+    #     decide de verdad» (maquina_q.py:591). Conviven tres catálogos (CLAUDE.md §6) y el del
+    #     backstop es el más pobre: un campo que él no ve y el resolver sí habría convertido
+    #     «¿cuánto produjo <ese campo> hoy?» en el panorama GLOBAL, respondiendo otra cosa con
+    #     seguridad. Por eso se consulta también el resolver — una llamada a BD, SOLO cuando el
+    #     detector puro ya dio True (nunca en la ruta caliente). Es lo mismo que hace la ruta
+    #     GLOBAL existente (:329 + :340).
+    if not entidad and _pide_mes_en_curso(texto) and _resolver_con_contexto(texto, texto) is None:
+        president_fn = _president_fn or _president_ep
+        # `periodo=` EXPLÍCITO: president es un endpoint FastAPI y su default es un objeto
+        # Query(...) que, si sobrevive, llega al SQL y revienta con "cannot adapt type 'Query'"
+        # (mismo patrón advertido en respuesta_analizar.py:369-371).
+        info = president_fn(periodo=None)
+        if info.get("encontrada") and info.get("productos"):
+            mensaje = respuesta_base.envolver(_intro_global_mes(usuario),
+                                              _cuerpo_mes_en_curso(info), _CIERRE_MES_CURSO)
+            # Panel PURO: `info` es la respuesta cruda de /analisis/president, exactamente el
+            # contrato que el front ya consume para "p50_cards" (multitab_shell.js:4402, commit
+            # ProdIAWebFront 9a97e8d). Se REUSA el tipo: cero cambios en el frontend.
+            return {"mensaje": mensaje, "panel": {"tipo": "p50_cards", "datos": info}}
+        # Sin reporte cargado no se inventa nada ni se cae al flujo normal (que respondería
+        # otra cosa): se dice lo que pasa.
+        return {"mensaje": ("No tengo el panorama de producción del mes en curso: falta ingerir "
+                            "el REPORTE_PRESIDENT en este entorno."), "panel": None}
+
     # ── N5 RANKING (eje ortogonal) ────────────────────────────────────────────────────────────
     # Va ANTES del resolver: el ranking global NO tiene entidad de entrada (la entidad es la
     # RESPUESTA) y moriría en la guarda "no identifiqué una entidad".

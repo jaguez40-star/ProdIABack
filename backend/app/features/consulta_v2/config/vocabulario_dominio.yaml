@@ -51,6 +51,16 @@ vocabulario:
   # nombra el gap en lenguaje corriente.
   - PETROLEO
   - FALTANTE
+  # [2026-09-08 · PRODUCCION-HOY-PANEL-MES] La lista tenía el SUSTANTIVO (PRODUCCION) pero
+  # ninguna forma del VERBO. Medido: «¿cuánto producimos hoy?» —la pregunta más natural del
+  # sistema— atrapaba por CUANTO (no anclado), no traía entidad, nivel_dominio daba None y
+  # maquina_q la marcaba desconocido: «No logré entender tu pregunta». En un sistema cuyo
+  # único tema es la producción, "producimos" es tan inequívoco como "producción".
+  # 🔑 Conjugaciones EXPLÍCITAS, no PRODUC\w*: PRODUCTO/PRODUCTOR entrarían y esos sí tienen
+  #    español común fuera del dominio. Verificado: ninguno de los 30 casos `desconocido` del
+  #    golden de clasificación contiene una forma verbal de producir.
+  - PRODUC(?:E|EN|IMOS|IENDO|ID[OA]S?|IR|IA|IAN)
+  - PRODUJ(?:O|ERON|IMOS)
 
 # --- ESTRUCTURAL: entidades del modelo, pero también español común -> exigen Capa 2 ---------
 estructural:

@@ -281,3 +281,16 @@
   esperado: analizar
 - pregunta: "¿Qué campos explican el gap de crudo?"
   esperado: analizar
+
+# ---- Panorama del mes en curso (2026-09-08 · PRODUCCION-HOY-PANEL-MES) ----
+# «¿Cuánto producimos hoy?» caía en desconocido por 'regex+filtro': CUANTO la atrapaba, no
+# traía entidad y el vocabulario tenía PRODUCCION pero ninguna forma del VERBO. Se añadieron
+# las conjugaciones a vocabulario_dominio.yaml. Estos dos fijan que el verbo basta.
+- pregunta: "¿Cuánto producimos hoy?"
+  esperado: cuantificar
+- pregunta: "¿Cuánto produjimos este mes?"
+  esperado: cuantificar
+# NEGATIVO — y regla del usuario (ver «meta» en :75-76): sin nombrar la producción, "llevamos"
+# no dice de qué. Meterlo al vocabulario abriría «¿cuántos pasos llevamos?». Sigue fuera.
+- pregunta: "¿Cuánto llevamos este mes?"
+  esperado: desconocido
