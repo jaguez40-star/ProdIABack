@@ -109,6 +109,35 @@ _MES_ACTUAL_KW = ("ESTE MES", "MES ACTUAL", "MES EN CURSO", "PASADO", "ANTERIOR"
 #    no matchea — verificado.
 _RX_SUJETO_PROPIO = re.compile(r"\bPRODU[CJ]IMOS\b")
 
+# [2026-09-08 · SUJETO-DESCONOCIDO] Un verbo de producción en 3ª persona seguido de un SUJETO
+# EXPLÍCITO: «produjo VRO», «produjo la VRO», «produjeron los campos de X». Si ese sujeto no
+# está en el catálogo, el drill NO puede heredar la entidad del turno anterior.
+# 🔴 Bug real medido en el servidor de pruebas (2026-09-08): «¿Cuánto produjo VRO en agosto?»
+#    tras hablar de CASTILLA se reescribía a «produccion de CASTILLA Cuanto produjo VRO...» —
+#    el clasificador veía CASTILLA (que SÍ está en el catálogo), ignoraba VRO y respondía «el
+#    Campo CASTILLA produjo 53,8 kbopd» con total seguridad. Dos entidades distintas
+#    confundidas, sin un solo aviso.
+# 🔑 `respuesta_cuantificar.py:566-577` YA tiene la respuesta honesta para esto («No reconocí
+#    «X» en el catálogo») y su comentario fija el principio: «un "Castiya" mal escrito no puede
+#    convertirse en "toda Ecopetrol" sin avisar». El drill se la estaba saltando: basta con
+#    devolver None para que la frase viaje entera y ese camino la atienda.
+# 🔑 Solo la 3ª persona (PRODUJO/PRODUCE/PRODUJERON/PRODUCEN). La 1ª del plural ya la corta
+#    _RX_SUJETO_PROPIO arriba, y las formas sin sujeto explícito («¿y cuánto produjo en mayo?»)
+#    no matchean porque exigen una palabra detrás que no sea preposición ni temporal.
+_RX_VERBO_CON_SUJETO = re.compile(
+    r"\bPRODU(?:JO|CE|JERON|CEN)\s+(?:EL|LA|LOS|LAS)?\s*([A-ZÑ][A-ZÑ0-9]{1,})\b")
+# Palabras que NO son un sujeto aunque sigan al verbo: preposiciones, temporales y cuantificadores.
+_NO_SUJETO = {"EN", "DE", "DEL", "AL", "A", "POR", "PARA", "CON", "SIN", "HASTA", "DESDE",
+              "ESTE", "ESTA", "ESE", "ESA", "AQUEL", "MAS", "MENOS", "MUCHO", "POCO",
+              "ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO", "AGOSTO",
+              "SEPTIEMBRE", "SETIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE",
+              "HOY", "AYER", "AÑO", "ANO", "MES", "DIA", "SEMANA", "TRIMESTRE",
+              # 🔑 Sustantivos GENÉRICOS del dominio: «produjo el CAMPO en mayo» no nombra a
+              #    nadie — es la entidad del contexto con el sustantivo elidido, y SÍ debe
+              #    heredar. Sin esto se rompía test_cuantificar_dia.py:735 (medido).
+              "CAMPO", "CAMPOS", "POZO", "POZOS", "ACTIVO", "ACTIVOS", "GERENCIA", "GERENCIAS",
+              "VICEPRESIDENCIA", "VP", "TOTAL", "PRODUCCION", "CRUDO", "GAS", "BLANCOS"}
+
 
 def _periodo_ctx_de(datos: dict):
     """Mes de la última respuesta de cuantificar, en formato "nombre año" (p.ej. "mayo 2026"),
@@ -212,6 +241,17 @@ def _continuacion(texto, ctx):
     #    guarda aplica, que es donde hace falta.
     if ctx.get("grupo") != "analizar" and _ranking_cont.detectar(texto) is not None:
         return None
+    # [2026-09-08 · SUJETO-DESCONOCIDO] GUARDA 3 · LA FRASE NOMBRA UN SUJETO QUE NO ESTÁ EN EL
+    # CATÁLOGO. Ver el comentario de _RX_VERBO_CON_SUJETO. Si el usuario dijo «produjo VRO» y
+    # VRO no se reconoce, heredar CASTILLA convierte su pregunta en OTRA — y la respuesta sale
+    # con la seguridad de siempre. Se devuelve None para que la frase viaje entera y el camino
+    # honesto de respuesta_cuantificar.py:574 diga «No reconocí «VRO» en el catálogo».
+    _m_suj = _RX_VERBO_CON_SUJETO.search(t)
+    if _m_suj and _m_suj.group(1) not in _NO_SUJETO:
+        # Solo corta si ese sujeto NO se resuelve: cuando SÍ está en el catálogo la frase es
+        # autocontenida y las ramas de abajo ya la tratan bien (`ent` la detecta).
+        if respuesta_jerarquizar.entidad_en(_m_suj.group(1)) is None:
+            return None
     ent = respuesta_jerarquizar.entidad_en(texto)      # ¿nombra una entidad (hijo o cualquiera)?
     # Excepción de longitud: una continuación de serie/variación que NO nombra entidad hereda la del
     # contexto de cuantificar aunque supere 5 tokens. Exige ctx de cuantificar CON entidad (el ctx de
