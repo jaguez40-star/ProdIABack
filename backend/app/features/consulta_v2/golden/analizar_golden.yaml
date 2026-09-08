@@ -49,3 +49,61 @@
 - pregunta: "muéstrame la media móvil de Cusiana"
   entidad: "CUSIANA"
   sub: tendencia
+
+# --- referencia / cumplimiento P50 por mes (2026-09-08 · P50-CUMPLIMIENTO-MES) ---
+# Antes de este bloque el golden NO tenía NI UN caso de `referencia` (medido: cero
+# coincidencias de "referencia" y de "P50" en el archivo). La sub-intención que responde el
+# compromiso corporativo no estaba protegida por ninguna regresión. Son las 10 formas reales
+# en que un usuario pide lo mismo — variaciones de registro, no sinónimos de laboratorio.
+- pregunta: "¿Qué cumplimiento tuvimos frente al P50 en agosto?"
+  entidad: null
+  sub: referencia
+- pregunta: "¿Cómo vamos contra el compromiso P50 de agosto?"
+  entidad: null
+  sub: referencia
+- pregunta: "cumplimiento p50 agosto"
+  entidad: null
+  sub: referencia
+- pregunta: "¿Cuánto le dimos al P50 en agosto?"
+  entidad: null
+  sub: referencia
+- pregunta: "¿Cuánto cumplimos de la meta P50 en agosto?"
+  entidad: null
+  sub: referencia
+- pregunta: "¿Estamos cumpliendo el P50 en agosto?"
+  entidad: null
+  sub: referencia
+- pregunta: "¿Qué tan cerca quedamos del P50 en agosto?"
+  entidad: null
+  sub: referencia
+- pregunta: "¿Cuál es el nivel de cumplimiento del compromiso P50 para agosto?"
+  entidad: null
+  sub: referencia
+- pregunta: "¿Cómo quedó el real contra el P50 en agosto?"
+  entidad: null
+  sub: referencia
+- pregunta: "Muéstrame el cumplimiento del P50 del mes de agosto."
+  entidad: null
+  sub: referencia
+
+# --- casos NEGATIVOS: parecidas pero NO equivalentes (2026-09-08) ---
+# Están aquí para que un futuro ensanchamiento del vocabulario de cumplimiento no se las lleve
+# por delante: el día que alguien meta "PROYECCION" o "COMO VAMOS" en _CUMPLIMIENTO, o quite
+# la exclusión causal, el gate cae.
+# 1) Deíctico sin P50: sigue en proyeccion (ya lo fijaba :15-17; el cambio no debe alterarlo).
+- pregunta: "¿Cómo vamos este mes?"
+  entidad: null
+  sub: proyeccion
+# 2) Proyección CON P50 pero sin cumplimiento: se pide a dónde vamos a llegar, no qué cumplimos.
+- pregunta: "¿Cuál es la proyección de cierre del P50 en agosto?"
+  entidad: null
+  sub: proyeccion
+# 3) Meta sin cumplimiento: proyección pura (subrouter.py:55-56, desde el 2026-08-13).
+- pregunta: "¿Vamos a llegar al P50 este mes?"
+  entidad: null
+  sub: proyeccion
+# 4) Cumplimiento + P50 pero CAUSAL: se pide la explicación, no la cifra. Si esto cayera en
+#    `referencia`, quien pregunta "por qué" recibiría un número.
+- pregunta: "¿Por qué no cumplimos el P50 en agosto?"
+  entidad: null
+  sub: causal

@@ -288,27 +288,79 @@ def _responder_core(texto: str, entidad: str | None = None, usuario=None, conver
                     if s and s.get("serie"):
                         panel_ref = {"tipo": "p50_vp", "datos": s}
             else:   # nivel is None -> global ECP (REPORTE_PRESIDENT, escala kbpe)
-                # [2026-09-07 · PANEL-P50-ANUAL] El P50 corporativo se pacta por AÑO y la pregunta
-                # natural («¿cómo va el P50 en 2026?») es por la SERIE, no por un mes suelto. Si
-                # core.p50_2026 tiene los 12 meses se responde la serie + panel; si no (tabla sin
-                # migrar en este entorno), se cae al comportamiento anterior: la cifra del corte.
-                anual = serie_anual_fn()
-                if anual and anual.get("serie"):
-                    cuerpo = _p50.formatear_serie_anual(anual)
-                    panel_ref = {"tipo": "p50_anual", "datos": anual}
-                else:
-                    info = president_fn(periodo=None)
-                    if not info.get("encontrada"):
-                        cuerpo = "No tengo el compromiso P50 disponible en este momento."
+                # [2026-09-08 · P50-CUMPLIMIENTO-MES] El PERIODO deja de descartarse. Hasta hoy
+                # esta rama era CIEGA al mes: «¿cuál es el cumplimiento del P50 para el mes de
+                # AGOSTO?» respondía la serie anual completa y la palabra "agosto" no se leía en
+                # ningún punto de las 85 líneas de la rama `referencia` — medido. El detector YA
+                # existía (cuantificar/slots.periodo_texto, reusado en :358 para la rama causal
+                # desde el 2026-08-26) y el endpoint YA aceptaba `periodo`. Solo faltaba
+                # conectarlos, más el puente de formato (slots dice "agosto", president exige
+                # "2026-08": p50_referencia.periodo_yyyymm).
+                # 🔑 `periodo=` va EXPLÍCITO siempre: `president` es un endpoint FastAPI y su
+                #    default es un objeto Query(...) que, si sobrevive, llega al SQL y revienta
+                #    con "cannot adapt type 'Query'" (mismo patrón advertido en :369-371).
+                per_txt = _slots.periodo_texto(texto)
+                per_ym = _p50.periodo_yyyymm(per_txt)
+                if per_ym:
+                    # MES CONCRETO pedido -> la tarjeta de ESE mes, con el panel de 5 tarjetas
+                    # (el mismo del panorama). No la serie anual: el usuario acotó, se respeta.
+                    info = president_fn(periodo=per_ym)
+                    if not info.get("encontrada") or not info.get("productos"):
+                        # Honesto y explícito: se nombra el mes que NO se pudo servir. Callarlo
+                        # y devolver otro periodo es el fallo que este bloque viene a corregir.
+                        cuerpo = (f"No tengo el compromiso P50 para {_p50.etiqueta_periodo(per_ym)}"
+                                  " — ese mes no tiene REPORTE_PRESIDENT cargado en este entorno.")
                     else:
                         card = next((p for p in info.get("productos", [])
                                     if p.get("entidad", "").upper() == producto), None)
                         if card is None:
                             card = next((t for t in info.get("totales", [])
                                         if t.get("entidad") == "Ecopetrol"), None)
-                        cuerpo = (_p50.formatear_cifra_global(card, info.get("unidad", "kbpe"),
-                                                              producto, info.get("corte"))
-                                  if card else "No tengo el compromiso P50 disponible en este momento.")
+                        cuerpo = (_p50.formatear_cumplimiento_mes(
+                                      card, info.get("unidad", "kbpe"), producto, per_ym,
+                                      info.get("corte"))
+                                  if card else
+                                  f"No tengo el compromiso P50 para {_p50.etiqueta_periodo(per_ym)}.")
+                        # Panel PURO: los datos ya están en `info`, se mandan tal cual. Con un
+                        # panel lazy el navegador repetiría el fetch y podría servir un mes
+                        # distinto al del texto si entre ambas llamadas entra una ingesta — un
+                        # panel que contradice su propio mensaje es peor que no tener panel.
+                        # Mismo patrón puro que "p50_anual" (abajo) y "analiza_tend".
+                        panel_ref = {"tipo": "p50_cards", "datos": info}
+                else:
+                    # SIN mes concreto. Si el usuario SÍ escribió un periodo pero no es
+                    # resoluble aquí («mes pasado»), se DICE: servir la serie anual callando lo
+                    # que se pidió sería el mismo bug de arriba entrando por una puerta más
+                    # estrecha. Resolver "mes pasado" de verdad exige el mes en curso (BD) y
+                    # queda fuera de este plan — pero nunca en silencio.
+                    aviso = ""
+                    if per_txt:
+                        aviso = (f"⚠️ Pediste «{per_txt}» y esta referencia resuelve meses por su "
+                                 "nombre (p. ej. «agosto»); te muestro la vista anual, que lo "
+                                 "incluye.\n\n")
+                    # [2026-09-07 · PANEL-P50-ANUAL] Comportamiento anterior, INTACTO: el P50
+                    # corporativo se pacta por AÑO y la pregunta natural («¿cómo va el P50 en
+                    # 2026?») es por la SERIE, no por un mes suelto. Si core.p50_2026 tiene los
+                    # 12 meses se responde la serie + panel; si no (tabla sin migrar en este
+                    # entorno), se cae al comportamiento anterior: la cifra del corte.
+                    anual = serie_anual_fn()
+                    if anual and anual.get("serie"):
+                        cuerpo = aviso + _p50.formatear_serie_anual(anual)
+                        panel_ref = {"tipo": "p50_anual", "datos": anual}
+                    else:
+                        info = president_fn(periodo=None)
+                        if not info.get("encontrada"):
+                            cuerpo = "No tengo el compromiso P50 disponible en este momento."
+                        else:
+                            card = next((p for p in info.get("productos", [])
+                                        if p.get("entidad", "").upper() == producto), None)
+                            if card is None:
+                                card = next((t for t in info.get("totales", [])
+                                            if t.get("entidad") == "Ecopetrol"), None)
+                            cuerpo = aviso + (
+                                _p50.formatear_cifra_global(card, info.get("unidad", "kbpe"),
+                                                            producto, info.get("corte"))
+                                if card else "No tengo el compromiso P50 disponible en este momento.")
             intro = _intro(alcance, usuario)
             mensaje = respuesta_base.envolver(intro, cuerpo, _CIERRE_PROY)
             # [2026-09-07] Antes: «el global ECP sigue en None». Ya NO — la rama global emite

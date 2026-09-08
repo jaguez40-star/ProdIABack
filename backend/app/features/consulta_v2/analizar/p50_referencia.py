@@ -422,6 +422,97 @@ def formatear_cifra_global(card: dict, unidad: str, producto: str, corte: str | 
     return linea
 
 
+# [2026-09-08 · P50-CUMPLIMIENTO-MES] Puente entre DOS contratos que no encajaban:
+#   · cuantificar/slots.periodo_texto() devuelve   "agosto" | "agosto 2026" | "mes pasado" | None
+#   · analisis.api.president(periodo=...) exige     "2026-08"  (su SQL hace to_char(...,'YYYY-MM'))
+# Sin esta conversión, pasar "agosto" produce to_char(...) = 'agosto', que no casa con NINGUNA
+# fila -> encontrada:False -> el chat diría «no tengo el P50 disponible». Un fallo mudo
+# disfrazado de dato faltante, que es peor que un error visible.
+# 🔑 _MESES_NUM se IMPORTA de slots, no se copia. El proyecto ya pagó el precio de duplicar el
+#    detector de meses: el mismo bug de substring ("mayo" dentro de "mayor") vivía en dos
+#    gemelos a la vez (ver slots.py:501-503 y respuesta_analizar.py:25-27). Un solo diccionario.
+# 🔑 Función PURA: no toca BD, no importa nada de analisis.api. Testeable sin entorno.
+_ANIO_P50 = 2026
+
+
+def periodo_yyyymm(per: str | None, anio_defecto: int = _ANIO_P50) -> str | None:
+    """"agosto" -> "2026-08". None si no hay un MES CONCRETO que resolver.
+
+    Devuelve None a propósito en tres casos; el llamador decide qué hacer, y lo DICE:
+      · per is None            -> el usuario no nombró mes ("¿cómo va el P50?")
+      · per == "mes pasado"    -> RELATIVO: resolverlo exigiría saber el mes en curso, y este
+                                  módulo es puro. Adivinarlo aquí arriesgaría servir un mes
+                                  distinto al que el texto anuncia.
+      · mes no reconocido      -> nunca inventar un periodo.
+    """
+    if not per:
+        return None
+    p = str(per).strip().lower()
+    if p.startswith("mes "):                 # "mes pasado" / "mes anterior"
+        return None
+    from app.features.consulta_v2.cuantificar.slots import _MESES_NUM
+    partes = p.split()
+    mes = _MESES_NUM.get(partes[0])
+    if not mes:
+        return None
+    anio = anio_defecto
+    for tk in partes[1:]:                    # el año viaja como 2º token ("agosto 2026")
+        if len(tk) == 4 and tk.isdigit():
+            anio = int(tk)
+            break
+    return f"{anio:04d}-{mes:02d}"
+
+
+# Nombres para rotular el mes en el texto. NO se derivan invirtiendo _MESES_NUM: ese
+# diccionario tiene DOS claves para el 9 ("septiembre" y "setiembre") y la inversión daría
+# una u otra según el orden de iteración — no determinista de cara al usuario.
+_MES_NOMBRE = {1: "enero", 2: "febrero", 3: "marzo", 4: "abril", 5: "mayo", 6: "junio",
+               7: "julio", 8: "agosto", 9: "septiembre", 10: "octubre", 11: "noviembre",
+               12: "diciembre"}
+
+
+def etiqueta_periodo(periodo: str) -> str:
+    """"2026-08" -> "agosto de 2026". Si el formato no es YYYY-MM, devuelve el texto tal cual."""
+    try:
+        a, m = str(periodo).split("-")
+        return f"{_MES_NOMBRE.get(int(m), periodo)} de {a}"
+    except (ValueError, AttributeError, TypeError):
+        return str(periodo)
+
+
+def formatear_cumplimiento_mes(card: dict, unidad: str, producto: str, periodo: str,
+                               corte: str | None = None) -> str:
+    """Cuerpo del cumplimiento P50 de UN MES CONCRETO. `card` = dict de analisis.president().
+
+    Hermana de `formatear_cifra_global` (:406), NO su reemplazo: aquella la sigue usando la
+    rama sin periodo y 3 tests fijan su salida exacta. La diferencia es una sola y es la razón
+    de existir de esta función: ROTULA EL MES. Decir "Real del mes" cuando el mes es elegible
+    es el mismo fallo silencioso que este plan corrige — si un día se sirviera otro periodo,
+    nada en la respuesta lo delataría. PURA: no toca BD ni LLM.
+    """
+    ent = card.get("entidad", "Ecopetrol")
+    real, p50 = card.get("real_mes"), card.get("base_p50")
+    pct = card.get("cumpl_p50")
+    etiqueta = etiqueta_periodo(periodo)
+    if real is None or p50 is None:
+        return (f"No tengo el cumplimiento del P50 de {ent} para {etiqueta} — ese mes no tiene "
+                "real y P50 a la vez en la fuente.")
+    linea = (f"📊 {ent} · cumplimiento del P50 · {etiqueta}"
+             + (f" (corte {corte})" if corte else "") + "\n\n"
+             f"Real: {_kbpe(real)} {unidad} · Base P50: {_kbpe(p50)} {unidad}")
+    if pct is not None:
+        linea += f" · {pct}% del P50"
+    gap = card.get("delta_p50")
+    if gap is None:
+        gap = round(float(real) - float(p50), 1)
+    signo = "+" if gap >= 0 else ""
+    linea += f"\nGap vs P50: {signo}{_kbpe(gap)} {unidad}"
+    comp = card.get("compromiso")
+    if comp is not None and card.get("compromiso_difiere"):
+        linea += f"\nCompromiso (RETO): {_kbpe(comp)} {unidad}"
+    return linea
+
+
 def formatear_cifra_vp(vice: str, info: dict, producto: str) -> str:
     """Cuerpo cuando el P50 existe por VICEPRESIDENCIA (NEW MES-AÑO t8+t2). `info` = el dict de
     `p50_por_vp`. ⚠️ Rotula unidad (bbl/MSCF, R6 — NO kbpe, esa es la escala corporativa) y el
