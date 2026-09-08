@@ -2884,8 +2884,14 @@ def president_senda(anio: int = Query(2026)):
                 que es exactamente core.p50_2026.real_filiales de esos meses.
       · P50  -> core.p50_2026, los 12 meses del compromiso.
 
-    🔑 UNIDADES: DATOS_MES ya viene en kboepd (calendar.md:11). 'POP Filiales' viene en bpd
-       -> /1000. Sin convertir, la barra de filiales sale 1000x y el gráfico es ilegible.
+    🔑 UNIDADES: las DOS fuentes vienen en bpd -> /1000 las dos.
+       [2026-09-08 · CORRECCIÓN] La primera versión solo dividía 'POP Filiales', porque el plan
+       daba por hecho que DATOS_MES ya venía en kboepd citando calendar.md:11. FALSO, y medido
+       contra el endpoint en el servidor de pruebas: octubre devolvía ecopetrol=606778.5 junto
+       a filiales=126.8, y el `total` sumaba las dos escalas. En el gráfico el eje se iba a
+       600k, la línea P50 (~740) quedaba aplastada contra el cero y la franja de filiales era
+       el 0,02% de la barra: invisible. calendar.md describe la MEDIDA (BPDEQ_M es un caudal),
+       no la escala en que esta tabla la almacena.
     🔑 REPORTE: cada reporte reescribe la serie anual completa -> se toma el ÚLTIMO reporte_id,
        no un agregado. Medido: 201 reportes, 201 filas, cero duplicados reales.
     🔑 'POP Filiales' mezcla detalle y subtotales en la misma tabla (TOTAL HOCOL, Total Gas,
@@ -2899,10 +2905,19 @@ def president_senda(anio: int = Query(2026)):
                  "filiales": None, "total": None, "p50": None, "es_real": False}
              for m in range(1, 13)}
 
+    _por_esc = {}          # {mes: {"REAL": kboepd, "OPERATIVO": kboepd}}
+
     with eng.connect() as c:
         # --- ECP: DATOS_MES, un solo reporte para no mezclar versiones del plan.
-        # REAL y OPERATIVO en la misma pasada: REAL marca los meses cerrados, OPERATIVO da la
-        # senda completa incluidos los futuros.
+        # [2026-09-08 · CORRECCIÓN] Cada mes toma el escenario que le corresponde:
+        #   · mes CERRADO (tiene REAL)  -> REAL, lo que se produjo
+        #   · mes FUTURO  (sin REAL)    -> OPERATIVO, el plan revisado
+        # La primera versión pintaba OPERATIVO en TODOS los meses y lo rotulaba "Real
+        # Ecopetrol". Medido en el reporte 247: agosto REAL=592,9 contra OPERATIVO=621,0 --
+        # el panel enseñaba el plan disfrazado de real, 28 kboepd por encima. La lámina
+        # gerencial da 714,5 para agosto (593,1 + 121,4 de filiales), que cuadra con REAL.
+        # Es el mismo fallo silencioso que este endpoint existe para cerrar: no falla, no
+        # avisa, responde otra cosa con seguridad.
         rid = c.execute(sa.text("""
             SELECT reporte_id FROM core.fact_tabla_hoja
             WHERE tabla_label = 'DATOS_MES (detalle mensual)'
@@ -2921,10 +2936,17 @@ def president_senda(anio: int = Query(2026)):
                 esc, mes, total = r[0], int(r[1]), float(r[2])
                 if mes not in meses:
                     continue
-                if esc == "REAL":
-                    meses[mes]["es_real"] = True          # el mes tiene cierre medido
-                else:
-                    meses[mes]["ecopetrol"] = round(total, 1)
+                # Se guardan los DOS y luego se elige, porque el orden en que llegan las filas
+                # no está garantizado: decidir sobre la marcha dejaría el resultado a merced de
+                # cuál escenario leyó primero.
+                _por_esc.setdefault(mes, {})[esc] = round(total / 1000.0, 1)  # bpd -> kboepd
+
+        for mes, escs in _por_esc.items():
+            if "REAL" in escs:
+                meses[mes]["es_real"] = True            # cerrado: manda lo que se produjo
+                meses[mes]["ecopetrol"] = escs["REAL"]
+            elif "OPERATIVO" in escs:
+                meses[mes]["ecopetrol"] = escs["OPERATIVO"]   # futuro: el plan revisado
 
         # --- FILIALES: 'POP Filiales', `Total general`, último reporte. En bpd -> /1000.
         rid_f = c.execute(sa.text("""
@@ -2944,15 +2966,35 @@ def president_senda(anio: int = Query(2026)):
                 if mes in meses:
                     meses[mes]["filiales"] = round(float(r[1]) / 1000.0, 1)
 
-        # --- P50. try/except porque la migración 011 es un paso MANUAL por entorno (mismo
-        # criterio que `p50_respaldo` en president()): habrá una ventana con el código
-        # desplegado y la tabla sin crear, y sin la guarda se caería el endpoint entero.
+        # --- P50 + REAL de los meses cerrados. try/except porque la migración 011 es un paso
+        # MANUAL por entorno (mismo criterio que `p50_respaldo` en president()): habrá una
+        # ventana con el código desplegado y la tabla sin crear, y sin la guarda se caería el
+        # endpoint entero.
+        #
+        # [2026-09-08 · CORRECCIÓN] Los meses CERRADOS (ene-ago) toman su real de ESTA tabla,
+        # no de DATOS_MES + POP Filiales. Es la MISMA decisión ya vigente en president() para
+        # las tarjetas (ver el comentario de `empresas`, arriba en este archivo): el real de un
+        # mes cerrado no debe depender de qué reporte se ingirió.
+        # Medido contra el reporte 247: componiendo DATOS_MES REAL + POP Filiales, marzo daba
+        # 713,5 contra los 728,0 de la lámina y julio 719,9 contra 708,2 -- desviaciones de
+        # hasta ±14,5 kboepd, erráticas en signo (no es un factor ni un desfase corregible).
+        # POP Filiales es la senda de CIERRE, no el real observado, y por eso no reconcilia.
+        # Además esta tabla SÍ tiene enero, que a DATOS_MES le falta en el reporte 247.
         if anio == 2026:
             try:
-                for r in c.execute(sa.text("SELECT mes, p50 FROM core.p50_2026")):
+                for r in c.execute(sa.text(
+                        "SELECT mes, p50, real_ecopetrol, real_filiales FROM core.p50_2026")):
                     mes = int(r[0])
-                    if mes in meses and r[1] is not None:
+                    if mes not in meses:
+                        continue
+                    if r[1] is not None:
                         meses[mes]["p50"] = float(r[1])
+                    # Solo donde la lámina trae el desglose (ene-ago). Sep-dic quedan en NULL
+                    # ahí y conservan lo que ya pusieron DATOS_MES/POP: la senda proyectada.
+                    if r[2] is not None and r[3] is not None:
+                        meses[mes]["ecopetrol"] = float(r[2])
+                        meses[mes]["filiales"] = float(r[3])
+                        meses[mes]["es_real"] = True       # cerrado y transcrito de la lámina
             except Exception:
                 pass                                       # sin P50 el gráfico pinta solo barras
 
@@ -2966,8 +3008,8 @@ def president_senda(anio: int = Query(2026)):
     ultimo_real = max((m["mes"] for m in serie if m["es_real"]), default=0)
     return {"anio": anio, "unidad": "kboepd", "serie": serie,
             "ultimo_mes_real": ultimo_real,
-            "fuentes": {"ecopetrol": "DATOS_MES · escenario OPERATIVO",
-                        "filiales": "POP Filiales · Total general",
+            "fuentes": {"cerrados": "core.p50_2026 · lámina (real ene-ago)",
+                        "proyectados": "DATOS_MES escenario OPERATIVO + POP Filiales",
                         "p50": "core.p50_2026"}}
 
 
