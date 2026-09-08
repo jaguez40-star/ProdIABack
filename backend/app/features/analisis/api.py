@@ -2820,16 +2820,25 @@ def president(periodo: str | None = Query(None)):
     # medido, el reporte del 29-jul da Upstream 706,65 contra los 708,2 de la lamina porque se
     # tomo antes del cierre. Agosto, con reporte del 31, si cuadra (714,32 vs 714,5).
     # Mismo try/except que `p50_respaldo`: las migraciones son un paso manual por entorno.
+    # 🔑 El mes que se MIRA no es el del reporte: el reporte del 1-sep cierra AGOSTO, y el del
+    # 31-ago tambien muestra agosto. `corte` es la fecha del reporte; el mes de los datos es el
+    # del propio reporte cuando cae dentro del mes, y el ANTERIOR cuando el reporte es de los
+    # primeros dias del siguiente (dia <= 3, que es cuando se publica el cierre).
+    _mes_datos = None
+    if fr and fr[0] and fr[0].year == 2026:
+        _mes_datos = fr[0].month
+        if fr[0].day <= 3 and _mes_datos > 1:
+            _mes_datos -= 1               # reporte de cierre: los datos son del mes anterior
     empresas = None
-    if fr and fr[0] and fr[0].year == 2026 and fr[0].month <= 8:
+    if _mes_datos is not None and _mes_datos <= 8:
         try:
             fila = c.execute(sa.text("""
                 SELECT real_ecopetrol, real_filiales, real_nacional, p50
-                FROM core.p50_2026 WHERE mes = :mes"""), {"mes": fr[0].month}).first()
+                FROM core.p50_2026 WHERE mes = :mes"""), {"mes": _mes_datos}).first()
             if fila and fila[0] is not None:
                 empresas = {
                     "fuente": "lamina",   # el frontend puede rotular de donde sale la cifra
-                    "mes": fr[0].month,
+                    "mes": _mes_datos,
                     "ecopetrol": float(fila[0]),
                     "filiales": float(fila[1]),
                     "nacional": float(fila[2]),
@@ -2843,7 +2852,7 @@ def president(periodo: str | None = Query(None)):
         if _pv:
             empresas = {
                 "fuente": "reporte",
-                "mes": (fr[0].month if fr and fr[0] else None),
+                "mes": _mes_datos,
                 "ecopetrol": (_pv.get("Ecopetrol") or {}).get("real_mes"),
                 "filiales": (_pv.get("Filiales") or {}).get("real_mes"),
                 "nacional": (_pv.get("Upstream") or {}).get("real_mes"),
