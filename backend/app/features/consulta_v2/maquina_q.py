@@ -152,6 +152,28 @@ def _continuacion(texto, ctx):
     # el bot y recibía la ficha jerárquica de CASTILLA.
     # Va ANTES de TODAS las ramas (incluida la de ranking y la de analizar, que cortan con
     # return propio) porque ninguna debe verlas primero.
+    # [2026-09-08 · DRILL-FICHA] ¿Este ctx puede alimentar los drills de CUANTIFICAR?
+    # Sí en dos casos, y son los dos que aportan una ENTIDAD sobre la que seguir preguntando:
+    #   · el ctx de cuantificar con entidad — el caso de siempre.
+    #   · el ctx de una FICHA jerárquica (`ofrece_produccion`), que además ofrece por escrito
+    #     «¿Quieres ver la producción de X?»: el usuario que responde «¿y el acumulado?» está
+    #     aceptando esa oferta, solo que con más precisión de la que la rama :391 sabe leer.
+    # Medido en la app (2026-09-08): ficha de CASTILLA -> «¿y el acumulado?» -> «No logré
+    # entender bien tu pregunta». Y no era solo el acumulado: con ese ctx morían TODAS las
+    # continuaciones («y en junio?», «vs operativo» también), porque las 5 ramas que saben
+    # heredar exigían `grupo == "cuantificar"` y la ficha no lleva esa clave.
+    # 🔑 Se nombran los DOS ctx admitidos en vez de usar `ctx.get("entidad")` a secas. Medido:
+    #    hoy el ctx de ANALIZAR tampoco llegaría a esas ramas (la suya, :284, corta siempre con
+    #    return propio), así que el criterio corto FUNCIONARÍA hoy — pero por un efecto colateral
+    #    del orden, no por contrato. Si mañana la rama de analizar deja de cortar, sus
+    #    continuaciones caerían en los drills de cuantificar EN SILENCIO. Nombrar los dos casos
+    #    hace explícito qué se admite. Misma lección que :181-184: el criterio que no se
+    #    desincroniza es el que se elige.
+    # 🔑 `bool(ctx.get("entidad"))` no es redundante: el ctx de RANKING lleva grupo
+    #    "cuantificar" pero NO lleva entidad, y las ramas N1/N2 harían KeyError sobre
+    #    ctx['entidad'] (su rama :259 ya corta antes, pero el helper no depende de ese orden).
+    _drill_cuant = bool(ctx.get("entidad")) and (
+        ctx.get("grupo") == "cuantificar" or ctx.get("ofrece_produccion"))
     if capacidades.detectar(texto, False) is not None:
         return None
     # [2026-09-08 · DRILL-AUTOCONTENIDA] GUARDA 1 · PREGUNTA CON SUJETO PROPIO.
@@ -210,7 +232,7 @@ def _continuacion(texto, ctx):
     # detector, dos consumidores.
     # 🔑 Techo CENTINELA: solo se pregunta «¿es esto una ventana?»; la fecha que salga se descarta.
     _es_ventana = _slots_dia.detectar_ventana(texto, _slots_dia.TECHO_CENTINELA) is not None
-    if (ctx.get("grupo") == "cuantificar" and ctx.get("entidad") and not ent
+    if (_drill_cuant and not ent                          # [2026-09-08 · DRILL-FICHA]
             and (any(k in t for k in _TEMP_CONT_KW) or _es_ventana)
             and not any(k in t for k in _ESTRUCT_KW)):
         prod_t = ctx.get("producto", "crudo")
@@ -232,7 +254,7 @@ def _continuacion(texto, ctx):
     # Tope de 8 tokens: cubre las cortesías reales ("sí dame el acumulado del año por favor")
     # sin convertir el corte en papel mojado.
     if (len(toks) > 5 and len(toks) <= 8
-            and ctx.get("grupo") == "cuantificar" and ctx.get("entidad") and not ent
+            and _drill_cuant and not ent                   # [2026-09-08 · DRILL-FICHA]
             and any(k in t for k in _ACUM_KW)
             and not any(k in t for k in _REF_CONTINUA_KW)):
         pass          # sigue hacia la rama del acumulado, que reescribe bien
@@ -341,15 +363,28 @@ def _continuacion(texto, ctx):
     # hallado en pruebas de navegador (2026-08-02). Preserva el producto (criterio AF9); la
     # referencia queda VERBATIM en el texto reescrito y la detecta slots._referencia() aguas abajo
     # (incl. el override AF-4.9: "promedio del año" fuerza N1, no N2, en extraer_slots).
-    if ctx.get("grupo") == "cuantificar" and any(k in t for k in _REF_CONTINUA_KW):
+    if _drill_cuant and any(k in t for k in _REF_CONTINUA_KW):   # [2026-09-08 · DRILL-FICHA]
         prod_ref = ctx.get("producto", "crudo")
         pieza_ref = "" if prod_ref == "crudo" else f"{prod_ref} de "
         return f"produccion de {pieza_ref}{ctx['entidad']} {texto.strip()}"
     # 1e (HE5): drill de cuantificar N1 -> N2. Va ANTES del check de ofrece_produccion (abajo) —
     # el ctx de cuantificar NUNCA lleva esa clave (solo la puebla jerarquizar), pero el orden importa
     # si en el futuro se unifican: un "sí"/"acumulado" tras N1 debe ir a N2, no repetir N1.
-    if ctx.get("grupo") == "cuantificar" and \
-       (any(k in t for k in _ACUM_KW) or t in _AFIRM):
+    # [2026-09-08 · DRILL-FICHA] La condición se parte en dos MITADES DELIBERADAMENTE
+    # ASIMÉTRICAS, y la asimetría es el corazón de este cambio:
+    #   · _ACUM_KW ("acumulado", "del año", "YTD"...) -> vale para AMBOS ctx. Pedir el
+    #     acumulado es inequívoco: lo pida tras un N1 o tras una ficha, quiere el acumulado.
+    #   · t in _AFIRM ("sí", "claro", "dale") -> SOLO para el ctx de cuantificar.
+    # 🔑 Por qué el «sí» NO se amplía. Un «sí» a secas acepta LA OFERTA QUE SE LE HIZO, y cada
+    #    cierre ofrece algo distinto: el de cuantificar dice «¿Quieres el acumulado del año?»,
+    #    el de la ficha dice «¿Quieres ver la producción de CASTILLA?». Medido HOY con ctx de
+    #    ficha: «claro» -> «produccion de CASTILLA» (correcto, lo resuelve la rama :391, que
+    #    corre DESPUÉS de esta). Si el «sí» entrara aquí, esta rama lo capturaría antes y el
+    #    usuario recibiría el ACUMULADO donde pidió la PRODUCCIÓN: una regresión sobre algo
+    #    que hoy funciona bien. Los tests `test_si_tras_ficha_sigue_dando_produccion` y
+    #    `test_si_tras_cuantificar_sigue_dando_acumulado` fijan las dos mitades.
+    if _drill_cuant and (any(k in t for k in _ACUM_KW)
+                         or (t in _AFIRM and ctx.get("grupo") == "cuantificar")):
         # AF9: preservar el producto del N1 (si no, "acumulado" tras un N1 de gas volvería a crudo).
         prod = ctx.get("producto", "crudo")
         pieza = "" if prod == "crudo" else f"{prod} de "
@@ -373,7 +408,7 @@ def _continuacion(texto, ctx):
     # incluida esta frase con verbo explícito, antes de aplicarlo.
     ambiguo_estructural = (any(k in t for k in _ESTRUCT_KW)
                            and not any(k in t for k in _PROD_EXPLICITO))
-    if ctx.get("grupo") == "cuantificar" and prod and not ambiguo_estructural:
+    if _drill_cuant and prod and not ambiguo_estructural:   # [2026-09-08 · DRILL-FICHA]
         prod_gen = ctx.get("producto", "crudo")
         pieza_gen = "" if prod_gen == "crudo" else f"{prod_gen} de "
         # [2026-08-26 · QV2-MES-CTX] La frase NO nombra su propio mes → hereda el de la ÚLTIMA
