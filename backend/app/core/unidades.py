@@ -19,21 +19,23 @@ FACTOR_GAS_BEQ = 5.7
 ESCALA_K = 1000.0
 
 # Rotulos por producto (decision del usuario 2026-09-08). Revierte la del 2026-07-21 (D3).
-#   CRUDO y BLANCOS son LIQUIDOS: barriles de petroleo por dia -> kbopd.
-#   GAS se convierte con el factor 5,7: barriles EQUIVALENTES por dia -> kbepd.
+#   CRUDO   -> kbopd  barriles de petroleo por dia
+#   BLANCOS -> kblpd  barriles de liquido por dia (NO es petroleo)
+#   GAS     -> kbepd  barriles EQUIVALENTES por dia (se convierte con el factor 5,7)
 # Un agregado que mezcla los tres lleva gas convertido, asi que es "equivalente": kbepd.
-UNIDAD_LIQUIDO = "kbopd"   # crudo y blancos
-UNIDAD_GAS = "kbepd"       # gas (equivalente)
+UNIDAD_CRUDO = "kbopd"
+UNIDAD_BLANCOS = "kblpd"
+UNIDAD_GAS = "kbepd"
 UNIDAD = UNIDAD_GAS        # default y total mezclado
 UNIDAD_ACUM = "kbbl-eq"    # volumen: acumulados (D7)
 UNIDAD_DIF = "bbl-eq"      # volumen: diferidas (D9)
 
-UNIDADES_PRODUCTO = {"CRUDO": UNIDAD_LIQUIDO, "GAS": UNIDAD_GAS, "BLANCOS": UNIDAD_LIQUIDO}
+UNIDADES_PRODUCTO = {"CRUDO": UNIDAD_CRUDO, "GAS": UNIDAD_GAS, "BLANCOS": UNIDAD_BLANCOS}
 
 
 def unidad_de(producto):
-    """Rotulo por producto: kbopd para liquidos, kbepd para gas."""
-    return UNIDAD_GAS if str(producto).upper() == "GAS" else UNIDAD_LIQUIDO
+    """Rotulo por producto: kbopd crudo, kblpd blancos, kbepd gas."""
+    return UNIDADES_PRODUCTO.get(str(producto).upper(), UNIDAD_CRUDO)
 
 # Conceptos que SI suman. MONETIZACION y CAMPOS_REG_ESP son atribuciones del MISMO volumen:
 # sumarlos duplica (crudo 968 en vez de 492). Plan v2 §1 H1; HALLAZGO_concepto_multiplicidad.md.

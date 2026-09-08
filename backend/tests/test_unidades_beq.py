@@ -42,10 +42,10 @@ def test_unidad_por_producto_no_mscf():
 
     Los liquidos NO son "equivalentes": solo el gas se convierte con el 5,7.
     """
-    assert u.UNIDADES_PRODUCTO == {"CRUDO": "kbopd", "GAS": "kbepd", "BLANCOS": "kbopd"}
-    assert u.unidad_de("CRUDO") == "kbopd"
-    assert u.unidad_de("BLANCOS") == "kbopd"
-    assert u.unidad_de("GAS") == "kbepd"
+    assert u.UNIDADES_PRODUCTO == {"CRUDO": "kbopd", "GAS": "kbepd", "BLANCOS": "kblpd"}
+    assert u.unidad_de("CRUDO") == "kbopd"      # barriles de petroleo
+    assert u.unidad_de("BLANCOS") == "kblpd"    # barriles de LIQUIDO (no es petroleo)
+    assert u.unidad_de("GAS") == "kbepd"        # equivalente
     assert u.unidad_de("gas") == "kbepd"          # acepta minuscula
     assert "MSCF" not in u.UNIDADES_PRODUCTO.values()
     assert u.UNIDAD_ACUM == "kbbl-eq"

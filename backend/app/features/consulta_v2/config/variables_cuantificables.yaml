@@ -74,7 +74,7 @@ productos:
       dia:  { confianza: alta, niveles: [N1, N2, N3, N4], nota: "REAL only" }
 
   produccion_blancos:
-    unidad: kbopd                    # [BEQ-2026-09-08] liquido, igual que el crudo
+    unidad: kblpd                    # [BEQ-2026-09-08] barriles de LIQUIDO por dia (no es petroleo)
     fuente: INGESTA
     referencias: [REAL, PPTO, OPERATIVO, CONTABLE, P50, promedio_anio]
     granos:
