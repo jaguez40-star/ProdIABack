@@ -2811,12 +2811,50 @@ def president(periodo: str | None = Query(None)):
 
     productos = [_card(e) for e in ["Crudo", "Gas", "Blancos"] if e in piv]
     totales = [_card(e) for e in ["Ecopetrol", "Filiales", "Upstream"] if e in piv]
+
+    # [2026-09-08] Desglose por EMPRESA (Ecopetrol / Filiales / Upstream) con dos fuentes segun
+    # el mes -- decision del usuario:
+    #   · ene-ago  -> core.p50_2026: historico CERRADO transcrito de la lamina gerencial.
+    #   · sep-dic  -> REPORTE_PRESIDENT, la fuente viva (lo que ya devuelve `totales`).
+    # El motivo es que el REAL de un mes cerrado no debe depender de QUE reporte se ingirio:
+    # medido, el reporte del 29-jul da Upstream 706,65 contra los 708,2 de la lamina porque se
+    # tomo antes del cierre. Agosto, con reporte del 31, si cuadra (714,32 vs 714,5).
+    # Mismo try/except que `p50_respaldo`: las migraciones son un paso manual por entorno.
+    empresas = None
+    if fr and fr[0] and fr[0].year == 2026 and fr[0].month <= 8:
+        try:
+            fila = c.execute(sa.text("""
+                SELECT real_ecopetrol, real_filiales, real_nacional, p50
+                FROM core.p50_2026 WHERE mes = :mes"""), {"mes": fr[0].month}).first()
+            if fila and fila[0] is not None:
+                empresas = {
+                    "fuente": "lamina",   # el frontend puede rotular de donde sale la cifra
+                    "mes": fr[0].month,
+                    "ecopetrol": float(fila[0]),
+                    "filiales": float(fila[1]),
+                    "nacional": float(fila[2]),
+                    "p50": float(fila[3]) if fila[3] is not None else None,
+                }
+        except Exception:
+            empresas = None              # tabla o columnas ausentes -> se cae al bloque de abajo
+    if empresas is None:
+        # Sep-dic (o sin historico): se arma con lo que trae el reporte.
+        _pv = {t["entidad"]: t for t in totales}
+        if _pv:
+            empresas = {
+                "fuente": "reporte",
+                "mes": (fr[0].month if fr and fr[0] else None),
+                "ecopetrol": (_pv.get("Ecopetrol") or {}).get("real_mes"),
+                "filiales": (_pv.get("Filiales") or {}).get("real_mes"),
+                "nacional": (_pv.get("Upstream") or {}).get("real_mes"),
+                "p50": (_pv.get("Upstream") or {}).get("base_p50"),
+            }
     # `p50_respaldo` es ADITIVO: ningun consumidor actual lo lee (el frontend solo mira
     # `productos`, multitab_shell.js:5755 y :6838), asi que anadirlo no cambia ninguna pantalla.
     # Queda servido y trazable para quien lo pinte despues. `null` cuando el mes SI esta ingerido
     # -- es el caso normal, y significa "no hizo falta respaldo".
     return {"encontrada": True, "reporte_id": rid, "corte": corte, "unidad": "kboepd",   # [BEQ-2026-09-08] mismo rotulo que el resto de la app: la hoja P50 ya venia en barriles equivalentes
-            "productos": productos, "totales": totales,
+            "productos": productos, "totales": totales, "empresas": empresas,
             "p50_respaldo": ({"base_p50": p50_respaldo, "entidad": "Upstream",
                               "mes": fr[0].month, "fuente": "core.p50_2026"}
                              if p50_respaldo is not None else None)}
