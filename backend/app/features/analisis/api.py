@@ -2704,6 +2704,32 @@ def _fil_serie_mensual(c, empresa_id, cur_y, cur_mo):
             "unidades": dict(_u.UNIDADES_PRODUCTO)}   # [BEQ-2026-09-08]
 
 
+@router.get("/president/meses")
+def president_meses():
+    """Meses que TIENEN hoja REPORTE_PRESIDENT cargada, para el selector del panel P50.
+
+    [2026-09-08] Sale de la BD y no de un calendario fijo: los meses disponibles dependen de
+    qué reportes se hayan ingerido, no del almanaque. Ofrecer los 12 meses haría que el usuario
+    eligiera uno sin datos y el panel respondiera «No se pudo cargar». Se actualiza solo con
+    cada ingesta nueva.
+    """
+    with get_engine().connect() as c:
+        filas = c.execute(sa.text("""
+            SELECT to_char(cr.fecha_reporte,'YYYY-MM') mes,
+                   MAX(cr.fecha_reporte) ultimo,
+                   COUNT(DISTINCT cr.reporte_id) reportes
+            FROM core.config_reporte cr
+            WHERE EXISTS (SELECT 1 FROM core.fact_tabla_hoja f
+                          WHERE f.reporte_id = cr.reporte_id AND f.hoja = 'REPORTE_PRESIDENT')
+            GROUP BY 1 ORDER BY 1 DESC""")).all()
+    meses = [{"periodo": r[0],
+              "label": f"{MESES_ES[int(r[0][5:7])]} {r[0][:4]}",
+              "corte": r[1].isoformat() if r[1] else None,
+              "reportes": int(r[2])} for r in filas]
+    # El primero es el más reciente: es el que el panel muestra por defecto (president() sin periodo).
+    return {"meses": meses, "default": meses[0]["periodo"] if meses else None}
+
+
 @router.get("/president")
 def president(periodo: str | None = Query(None)):
     """Tarjeta P50 por producto desde la hoja REPORTE_PRESIDENT (fact_tabla_hoja) — escala kbpe
