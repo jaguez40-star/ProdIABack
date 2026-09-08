@@ -29,6 +29,12 @@ from app.features.consulta_v2.cuantificar.slots import menciona_dia as _menciona
 from app.features.consulta_v2.cuantificar import ejecutor as _ejecutor
 from app.features.consulta_v2.cuantificar import validador as _validador
 from app.features.consulta_v2.cuantificar import ranking as _ranking
+# [2026-09-08 · PANEL-N1] El P50 para la tarjeta y la línea del panel. Se importa el MÓDULO,
+# no una copia de su regla: `nivel_soportado()` es el único sitio donde vive «qué niveles
+# tienen P50» (campo/activo NO lo tienen — p50_referencia.py:6-7,19-20). Duplicar esa
+# comprobación aquí heredaría la brecha de jerarquías de CLAUDE.md §6, donde «el activo
+# CASTILLA» resuelve como el CAMPO CASTILLA.
+from app.features.consulta_v2.analizar import p50_referencia as _p50
 from app.features.consulta_v2 import no_soportado as _no_soportado
 # [2026-09-08 · PRODUCCION-HOY-PANEL-MES] El panorama corporativo por producto sale de
 # REPORTE_PRESIDENT, no del fact diario: es la MISMA fuente que pinta el tablero, así que el
@@ -119,6 +125,49 @@ def _intro(res: dict, usuario) -> str:
     return ""                               # devolvió texto 2 veces pero con número → sin intro
 
 
+# [2026-09-08 · PANEL-N1] Escala de la hoja P50 -> escala del panel.
+# 🔑 NO es un factor cosmético. La hoja «NEW MES-AÑO» t8 está en BPD (promedio diario), y el
+#    panel dibuja en kbopd/kboepd. p50_referencia.py:28-39 lo mide contra la BD y advierte que
+#    NINGÚN ratio con el fact operativo es 1e6. Mezclar las dos escalas pinta la línea del P50
+#    mil veces fuera de sitio. El precedente es el bug dd8ffa2, que NO se detectó en navegador
+#    «porque las verificaciones solo usaron GOR y Rubiales, ambos CRUDO».
+# 🔑 La conversión se hace UNA vez, AQUÍ, y el payload viaja ya en la escala del panel: el
+#    frontend no debe conocer esta unidad (si la conociera habría dos criterios que se
+#    desincronizan — la lección de `_forma_no_soportada_ranking`).
+_P50_BPD_A_KBPD = 1000.0
+
+
+def _p50_del_mes(resuelta: dict, res: dict) -> dict | None:
+    """{'valor','label'} del compromiso P50 para la entidad y el MES de la pregunta, ya en la
+    escala del panel. None si ese nivel no tiene P50 (campo/activo) o no hay dato.
+
+    El mes sale de la SERIE, no del corte: `serie_por_vp` devuelve los 12 meses, así que
+    «¿cuánto produjo la VRO en abril?» compara contra el P50 de ABRIL (H-06). Respetar el
+    periodo de la pregunta es una regla del proyecto (CLAUDE.md §7) y la fuente de varios bugs
+    silenciosos.
+    """
+    nivel = resuelta.get("nivel")
+    if not _p50.nivel_soportado(nivel, resuelta):
+        return None
+    vice = resuelta.get("valor") if nivel == "vicepresidencia" else None
+    if nivel == "gerencia":
+        vice = (resuelta.get("puente") or {}).get("vp") or None
+    if not vice:
+        return None
+    serie = _p50.serie_por_vp(vice, (res.get("producto") or "crudo").upper())
+    if not serie or not serie.get("serie"):
+        return None
+    mes = res.get("mes") or {}
+    anio, num = mes.get("anio"), mes.get("mes")
+    if not (anio and num):
+        return None
+    clave = f"{anio:04d}-{num:02d}"
+    for punto in serie["serie"]:
+        if str(punto.get("fecha", "")).startswith(clave) and punto.get("p50"):
+            return {"valor": float(punto["p50"]) / _P50_BPD_A_KBPD, "label": "P50"}
+    return None
+
+
 def _panel_datos(res: dict) -> dict:
     """Datos del panel derecho, por nivel (HE6: cada nivel trae campos propios, sin fabricar
     campos sintéticos — N1/N2 KPI · N3 serie · N4 variación, Fase 3)."""
@@ -198,6 +247,34 @@ def _panel_datos(res: dict) -> dict:
     else:                                   # N1/N2 (KPI)
         d.update({"real": res["resultado"]["valor"], "ppto": res["referencia_valor"],
                   "cumplimiento_pct": res["cumplimiento_pct"], "estado": res["estado"]})
+        # [2026-09-08 · PANEL-N1] N1 pasa al panel de dos columnas (tarjeta KPI + curva diaria).
+        # Las 6 claves del contrato de `cuant_dia_panel` son las MISMAS que arma N1D arriba
+        # (:161-170) y N1 ya las tiene todas.
+        # 🔑 `dia_marcado` va en None a propósito: no hay un día que resaltar, la respuesta ES
+        #    el mes. El caso ya está soportado — es lo que hace N1DSER, cuyo comentario dice
+        #    «lo único que no se emite es dia_marcado […] la respuesta ES la curva completa».
+        # 🔑 El periodo sale del MES DE LA PREGUNTA, no del último mes con datos: mismo criterio
+        #    que N1D (decisión del usuario, 2026-08-25). Si preguntan por abril, la curva es de
+        #    abril.
+        if nivel == "N1":
+            _m = res.get("mes") or {}
+            d.update({
+                "entidad": res["entidad"]["nombre"],
+                "nivel_entidad": res["entidad"]["nivel"],
+                "segmento": "ecp",
+                "periodo": f"{_MESES_PANEL[_m['mes']]} {_m['anio']}",
+                "productos": [_PROD_DIM.get(res["producto"], "CRUDO")],
+                "dia_marcado": None,
+                # Respaldo de confianza de la cifra: no es lo mismo un mes con 30 de 30 días
+                # reportados que con 12. Ya lo calcula el ejecutor y hoy se descarta.
+                "dias_con_dato": (res.get("huella") or {}).get("registros"),
+                "dias_del_mes": (res.get("huella") or {}).get("dias_del_mes"),
+                "es_proyeccion": (res.get("huella") or {}).get("es_proyeccion"),
+                "referencia_label": res.get("referencia_label", "presupuesto"),
+                # `p50` solo viaja si el NIVEL lo tiene (H-05). En un campo va None y el panel
+                # rotula PPTO — nunca se inventa un compromiso que no existe.
+                "p50": res.get("p50"),
+            })
         if nivel == "N2":
             d["periodo_label"] = res["periodo_label"]
             d["meses_cerrados"] = res["meses_cerrados"]
@@ -528,7 +605,19 @@ def responder(texto: str, entidad: str | None = None, usuario=None, conversation
     else:
         cierre = _CIERRE   # HE3
     mensaje = respuesta_base.envolver(intro, cuerpo, cierre)
+    # [2026-09-08 · PANEL-N1] El P50 se resuelve AQUÍ (no dentro de _panel_datos) porque hace
+    # falta `resuelta` —el dict del resolutor, con `nivel` y `puente`— y esa función solo
+    # recibe `res`. Se adjunta a `res` para que _panel_datos lo emita sin cambiar su firma.
+    # Best-effort: si el P50 falla o no aplica, el panel sale con PPTO y la respuesta NO se
+    # degrada (mismo criterio que el backstop de entidad: informativo, nunca bloquea).
+    if res.get("nivel") == "N1":
+        try:
+            res["p50"] = _p50_del_mes(resuelta, res)
+        except Exception:
+            res["p50"] = None
     tipo = _PANEL_TIPO.get(res.get("nivel"), "cuant_kpi")
+    if res.get("nivel") == "N1":
+        tipo = "cuant_dia_panel"        # [2026-09-08 · PANEL-N1] salda la deuda de :70
     return {"mensaje": mensaje, "panel": {"tipo": tipo, "datos": _panel_datos(res)}}
 
 
