@@ -222,30 +222,41 @@ def _fin_mes(c, periodo_texto):
 # nivel_ranking -> SQL. Mismo fact que el resto de Cuantificar. Solo campo/activo en v1.
 # 🔑 El nivel `activo` NO inventa operador (el v1 hardcodeaba 'ECOPETROL' sin verificarlo): devuelve
 # NULL y el formateador simplemente no rotula operador a nivel activo. Ver §11 · D5.
+# [BEQ-2026-09-08] bpdeq_m, 3 conceptos, ECP, gas VENTA-GRAVABLE, /1000 -> kboepd (plan v2 §1 H1-H2).
+_SQL_FILTROS = """
+          AND co.nombre IN ('DERECO','PROPIEDAD','REGALIADISP')
+          AND m.grupo_prod = 'ECOPETROL'
+          AND (tp.nombre <> 'GAS' OR pr.nombre = 'VENTA-GRAVABLE')
+          AND m.reporte_id = (SELECT cr.reporte_id FROM core.config_reporte cr
+                              ORDER BY cr.fecha_reporte DESC LIMIT 1)"""
 _SQL = {
     "campo": """
         SELECT COALESCE(NULLIF(TRIM(f.campo),''), f.nombre) AS ent,
-               SUM(CASE WHEN es.nombre='REAL' THEN m.volumen ELSE 0 END) AS vreal,
-               SUM(CASE WHEN es.nombre='PPTO' THEN m.volumen ELSE 0 END) AS vppto,
+               SUM(CASE WHEN es.nombre='REAL' THEN m.bpdeq_m ELSE 0 END) / 1000.0 AS vreal,
+               SUM(CASE WHEN es.nombre='PPTO' THEN m.bpdeq_m ELSE 0 END) / 1000.0 AS vppto,
                MAX(f.operador) AS operador
         FROM core.fact_produccion_mes_ecp m
         JOIN core.dim_tipo_producto tp ON tp.tipo_producto_id = m.tipo_producto_id
         JOIN core.dim_escenario es     ON es.escenario_id     = m.escenario_id
         JOIN core.dim_fuente f         ON f.fuente_id         = m.fuente_id
-        WHERE m.fecha = :fin AND tp.nombre = :prod AND es.nombre IN ('REAL','PPTO')
+        JOIN core.dim_concepto co      ON co.concepto_id      = m.concepto_id
+        JOIN core.dim_proceso pr       ON pr.proceso_id       = m.proceso_id
+        WHERE m.fecha = :fin AND tp.nombre = :prod AND es.nombre IN ('REAL','PPTO')""" + _SQL_FILTROS + """
         GROUP BY 1""",
     "activo": """
         SELECT a.activo AS ent,
-               SUM(CASE WHEN es.nombre='REAL' THEN m.volumen ELSE 0 END) AS vreal,
-               SUM(CASE WHEN es.nombre='PPTO' THEN m.volumen ELSE 0 END) AS vppto,
+               SUM(CASE WHEN es.nombre='REAL' THEN m.bpdeq_m ELSE 0 END) / 1000.0 AS vreal,
+               SUM(CASE WHEN es.nombre='PPTO' THEN m.bpdeq_m ELSE 0 END) / 1000.0 AS vppto,
                NULL AS operador
         FROM core.fact_produccion_mes_ecp m
         JOIN core.dim_tipo_producto tp ON tp.tipo_producto_id = m.tipo_producto_id
         JOIN core.dim_escenario es     ON es.escenario_id     = m.escenario_id
         JOIN core.dim_fuente f         ON f.fuente_id         = m.fuente_id
+        JOIN core.dim_concepto co      ON co.concepto_id      = m.concepto_id
+        JOIN core.dim_proceso pr       ON pr.proceso_id       = m.proceso_id
         JOIN core.map_campo_activo a
              ON a.campo_norm = UPPER(COALESCE(NULLIF(TRIM(f.campo),''), f.nombre))
-        WHERE m.fecha = :fin AND tp.nombre = :prod AND es.nombre IN ('REAL','PPTO')
+        WHERE m.fecha = :fin AND tp.nombre = :prod AND es.nombre IN ('REAL','PPTO')""" + _SQL_FILTROS + """
         GROUP BY 1""",
 }
 
@@ -296,7 +307,8 @@ def calcular(slots: dict, _engine=None, campos_scope: set | None = None) -> dict
         return {"aplica": False, "texto": slots.get("diferido", "Ese ranking no está soportado.")}
     prod = slots.get("producto", "crudo")
     prod_es = _PROD_MAP.get(prod, "CRUDO")
-    unidad = "MSCF" if prod == "gas" else "bbl"
+    from app.core.unidades import UNIDAD as _UNIDAD_BEQ     # [BEQ-2026-09-08] antes hardcodeaba MSCF/bbl
+    unidad = _UNIDAD_BEQ
     metrica, direccion, top_n = slots["metrica"], slots["direccion"], slots["top_n"]
     plural = _NIVEL_PLURAL[nivel]
     scope_label = slots.get("scope_label")   # p.ej. "el Activo CASTILLA"; None = ranking global
@@ -361,8 +373,8 @@ def calcular(slots: dict, _engine=None, campos_scope: set | None = None) -> dict
     items = []
     for i, d in enumerate(top, 1):
         ol = _op(d[3]) if nivel == "campo" else {"txt": None, "es_ecp": None}
-        items.append({"pos": i, "entidad": d[0], "valor": round(d[1]), "ppto": round(d[2]),
-                      "gap": round(d[1] - d[2]), "operador": ol["txt"], "es_ecp": ol["es_ecp"]})
+        items.append({"pos": i, "entidad": d[0], "valor": round(d[1], 1), "ppto": round(d[2], 1),
+                      "gap": round(d[1] - d[2], 1), "operador": ol["txt"], "es_ecp": ol["es_ecp"]})   # [BEQ] kboepd
 
     return {
         "aplica": True, "grupo": "cuantificar", "nivel": "N5",

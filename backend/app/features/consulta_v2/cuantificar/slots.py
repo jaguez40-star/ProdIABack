@@ -574,7 +574,15 @@ def detectar_ventana(texto: str, techo=None) -> dict | None:
         ini = fin - _dt.timedelta(days=cant - 1)
     elif uni == "semana":
         ini = fin - _dt.timedelta(weeks=cant) + _dt.timedelta(days=1)
-    else:                                 # mes: se retrocede por calendario, no por 30 días
+    else:
+        # [BEQ-2026-09-08] "Los ultimos N meses" = N meses CERRADOS (decision D8). Antes anclaba en el
+        # ultimo dia CON REPORTE e incluia el mes en curso: pedias 3 y respondia 2, con el rotulo
+        # equivocado (plan v2 §1 H10). Se cierra el rango en el ultimo dia del ultimo mes cerrado.
+        import calendar as _cal
+        y, mo = fin.year, fin.month - 1
+        while mo < 1:
+            y, mo = y - 1, mo + 12
+        fin = _dt.date(y, mo, _cal.monthrange(y, mo)[1])
         y, mo = fin.year, fin.month - (cant - 1)
         while mo < 1:
             y, mo = y - 1, mo + 12

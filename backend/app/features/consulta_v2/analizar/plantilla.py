@@ -6,7 +6,7 @@ fabrica un faltante. La prosa del LLM (secciones) NO se usa aquí (Fase 1 es det
 """
 from app.features.consulta_v2.cuantificar.validador import fmt_valor
 
-_UNIDAD = {"CRUDO": "bbl", "GAS": "MSCF", "BLANCOS": "bbl"}
+from app.core.unidades import UNIDADES_PRODUCTO as _UNIDAD, UNIDAD_DIF as _UNIDAD_DIF   # [BEQ-2026-09-08]
 _PROD_L = {"CRUDO": "crudo", "GAS": "gas", "BLANCOS": "blancos"}
 _MES = ["", "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
         "septiembre", "octubre", "noviembre", "diciembre"]
@@ -53,7 +53,7 @@ def _split_lineas(split, prod):
     if not s or not s.get("total_clasificado"):
         return None, ""
     pl = _PROD_L.get(prod, prod.lower())
-    u = _UNIDAD.get(prod, "bbl")
+    u = _UNIDAD_DIF          # [BEQ] diferidas = VOLUMEN perdido (bbl-eq), no caudal
     np_pct = s["pct_no_planeada"]
     p_pct = round(100 - np_pct, 1)
     ctx = (f"CONTEXTO · {pl} (histórico ene-2023 a jul-2025, NO el mes en curso): del volumen "
@@ -177,9 +177,9 @@ def _iniciativa_bloque(d, ya_dicho=None) -> list:
         # 4) ritmo de cierre exigente
         for f in flags:
             if isinstance(f, dict) and f.get("tipo") == "pace_exigente" and f.get("requerido_dia"):
-                lineas.append(f"  · Para cerrar crudo en presupuesto se necesitan {_fmt(f['requerido_dia'], 'CRUDO')} bbl/día "
+                lineas.append(f"  · Para cerrar crudo en presupuesto se necesitan {_fmt(f['requerido_dia'], 'CRUDO')} kboepd "
                               f"en los {f.get('restantes')} días restantes — un {f.get('delta_pct')}% sobre el promedio "
-                              f"actual de {_fmt(f.get('promedio_dia'), 'CRUDO')} bbl/día.")
+                              f"actual de {_fmt(f.get('promedio_dia'), 'CRUDO')} kboepd.")
 
         # 5) brecha concentrada — solo si _dl_bloque NO la dijo ya para ese producto
         for f in flags:
@@ -317,9 +317,9 @@ def proyeccion(d, entidad) -> str:
                 "periodo (puede ser un mes ya cerrado o sin curva diaria que reconcilie).")
     prom = pace.get("promedio_dia"); req = pace.get("requerido_dia"); dpc = pace.get("delta_pct")
     rest = pace.get("restantes")
-    u = "bbl"
-    linea = (f"para cerrar {periodo}, el crudo requiere {_fmt(req, 'CRUDO')} {u}/día en los "
-             f"{rest} días restantes; va a un ritmo de {_fmt(prom, 'CRUDO')} {u}/día")
+    u = _UNIDAD["CRUDO"]                       # [BEQ] kboepd ya es caudal: sin "/dia"
+    linea = (f"para cerrar {periodo}, el crudo requiere {_fmt(req, 'CRUDO')} {u} en los "
+             f"{rest} días restantes; va a un ritmo de {_fmt(prom, 'CRUDO')} {u}")
     if dpc is not None:
         if dpc <= 0:
             veredicto = "va camino de cerrar en meta (el ritmo actual alcanza)"
@@ -348,7 +348,7 @@ def diferidas(d: dict, entidad: str | None) -> str:
         b = imp.get(prod, {})
         if not b.get("total"):
             continue
-        u = _UNIDAD.get(prod, "bbl")
+        u = _UNIDAD_DIF      # [BEQ] diferidas = VOLUMEN perdido (bbl-eq)
         top = "; ".join(f"{c['causa']} {c['pct']}%" for c in b["causas"])
         lineas.append(f"{_PROD_L[prod]}: las causas que más pesan históricamente son {top} "
                       f"(total histórico: {_fmt(b['total'], prod)} {u} perdidos).")
@@ -447,7 +447,7 @@ def tendencia(t: dict, entidad, producto: str = "CRUDO") -> str:
     if dirn == "estable":
         cuerpo = (f"la producción está ESTABLE: el cambio medio es de {abs(pm)}% mensual, por "
                   f"debajo del 1% que separa una tendencia real del ruido de operación. "
-                  f"Promedio del periodo: {_fmt(t['media'], producto)} {u}/mes.")
+                  f"Promedio del periodo: {_fmt(t['media'], producto)} {u}.")   # [BEQ] caudal, sin "/mes"
     else:
         # El signo va en la palabra, no en el número: "cae un -2.3%" es una doble negación que
         # se lee mal. abs() en la cifra y la dirección en el verbo.
@@ -457,7 +457,7 @@ def tendencia(t: dict, entidad, producto: str = "CRUDO") -> str:
         cuerpo = (f"la producción viene {dirn.upper()}: {verbo} {abs(pm)}% al mes {firmeza}, "
                   f"lo que a doce meses equivale a {abs(t['pct_anualizado'])}% "
                   f"{'de crecimiento' if dirn == 'al alza' else 'de declinación'}. "
-                  f"Promedio del periodo: {_fmt(t['media'], producto)} {u}/mes.")
+                  f"Promedio del periodo: {_fmt(t['media'], producto)} {u}.")   # [BEQ] caudal, sin "/mes"
 
     if any(v is not None for v in t.get("serie_mm") or []):
         cuerpo += " La media móvil de 3 meses está en la gráfica."

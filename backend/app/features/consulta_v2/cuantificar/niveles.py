@@ -4,6 +4,8 @@ explícitos, sin factorizar un `_desempeno_core`).
 
 HE4: el mes EN CURSO es PROYECCIÓN (T-1) — no se suma; se declara aparte (`en_curso`).
 AF7: BLANCOS a grano MES es el agregado autoritativo (el ×4 es de grano DÍA, fuera de alcance)."""
+import calendar as _cal                        # [BEQ-2026-09-08] dias del mes para el acumulado
+
 from app.features.analisis.api import desempeno as _desempeno_ep
 
 _MESES = ["", "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
@@ -67,8 +69,17 @@ def acumulado(resuelta: dict, dim_producto: str, _desempeno_fn=None, desde_mes: 
         #    curva». Gatear una suma MENSUAL con un flag DIARIO viola esa regla. `completo`
         #    se conserva solo para el mes del techo, que es el único que puede estar en curso.
         if m < ultimo or dm["mes"]["completo"]:
-            total_real += fila["real"]
-            total_ppto += (fila["ppto"] or 0)
+            # [BEQ-2026-09-08] fila["real"] es CAUDAL (kboepd). Un acumulado es VOLUMEN: caudal x dias.
+            # Mes cerrado -> dias del calendario; mes con reporte parcial -> dias con dato (D7,
+            # calendar.md §3). Resultado en kbbl-eq.
+            # [B1] Acceso defensivo: `mes` no siempre trae dias_del_mes/dias_con_data (fixtures y
+            # respuestas parciales). Fallback al calendario: el numero de dias de un mes es un dato
+            # del calendario, no del reporte, asi que nunca hace falta rendirse.
+            _m_info = dm["mes"]
+            _dim = _m_info.get("dias_del_mes") or _cal.monthrange(anio, m)[1]
+            _dias = _dim if _m_info.get("cerrado", True) else (_m_info.get("dias_con_data") or _dim)
+            total_real += fila["real"] * _dias
+            total_ppto += (fila["ppto"] or 0) * _dias
             meses.append(_MESES[m])
             serie_acum.append({
                 "mes": _MESES[m][:3].capitalize(),   # "Ene" — mismo formato corto que ritmo_mensual

@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Query
 import sqlalchemy as sa
 from app.core.db import get_engine
+from app.core import unidades as _u          # [BEQ-2026-09-08] punto unico de unidades
 from app.features.consulta.resolver import fuentes_de_activo, campos_de_activo
 
 router = APIRouter(prefix="/analisis", tags=["analisis"])
@@ -470,18 +471,23 @@ def _campos_sin_meta(c, entidad, fin, nivel):
     ids = fuentes_de_activo(entidad)
     if not ids:
         return []
-    q = sa.text("""
+    # [BEQ-2026-09-08] bpdeq_m, 3 conceptos, ECP, gas VENTA-GRAVABLE. /1000 en SQL -> kboepd.
+    q = sa.text(f"""
         SELECT COALESCE(NULLIF(TRIM(f.campo),''), TRIM(f.nombre)) campo, tp.nombre producto,
-               SUM(CASE WHEN es.nombre='REAL' THEN m.volumen ELSE 0 END) real,
-               SUM(CASE WHEN es.nombre='PPTO' THEN m.volumen ELSE 0 END) ppto
+               SUM(CASE WHEN es.nombre='REAL' THEN m.bpdeq_m ELSE 0 END) / 1000.0 real,
+               SUM(CASE WHEN es.nombre='PPTO' THEN m.bpdeq_m ELSE 0 END) / 1000.0 ppto
         FROM core.fact_produccion_mes_ecp m
         JOIN core.dim_fuente f        ON f.fuente_id        = m.fuente_id
         JOIN core.dim_tipo_producto tp ON tp.tipo_producto_id = m.tipo_producto_id
         JOIN core.dim_escenario es     ON es.escenario_id     = m.escenario_id
+        JOIN core.dim_concepto co      ON co.concepto_id      = m.concepto_id
+        JOIN core.dim_proceso pr       ON pr.proceso_id       = m.proceso_id
         WHERE m.fecha = :fin AND es.nombre IN ('REAL','PPTO') AND m.fuente_id IN :ids
+          AND {_u.SQL_CONCEPTOS} AND m.grupo_prod = 'ECOPETROL' AND {_u.SQL_PROCESO_GAS}
+              AND {_u.SQL_ULTIMO_REPORTE_M}
         GROUP BY 1, 2
-        HAVING SUM(CASE WHEN es.nombre='REAL' THEN m.volumen ELSE 0 END) > 0
-           AND SUM(CASE WHEN es.nombre='PPTO' THEN m.volumen ELSE 0 END) = 0
+        HAVING SUM(CASE WHEN es.nombre='REAL' THEN m.bpdeq_m ELSE 0 END) > 0
+           AND SUM(CASE WHEN es.nombre='PPTO' THEN m.bpdeq_m ELSE 0 END) = 0
         ORDER BY 3 DESC
     """).bindparams(sa.bindparam("ids", expanding=True))
     return [{"campo": r[0], "producto": r[1], "real": float(r[2] or 0)}
@@ -553,21 +559,27 @@ def desempeno(entidad: str | None = Query(None), segmento: str = Query("ecp"),
                 cs.append(f"{p}vice_id = :vid")
             return ("(" + " OR ".join(cs) + ")") if cs else "TRUE"
 
-        # --- Módulo 1: REAL vs PPTO por producto (SOLO mensual — VERIFICADO H1) ---
-        # H1: el `volumen` de cada producto vive en UN SOLO proceso (CRUDO→PROD_TOTAL,
-        # GAS→VENTA-GRAVABLE, BLANCOS→GAS CONVERTIDO MME); los demás procesos van en NULL.
-        # Por eso SUM(m.volumen) sobre TODOS los procesos NO doble-cuenta y es ROBUSTO al mapeo
-        # (no hay que hard-codear el proceso por producto). NO filtrar por proceso.
+        # --- Módulo 1: REAL vs PPTO por producto (SOLO mensual) ---
+        # [BEQ-2026-09-08] Medida = bpdeq_m (barriles EQUIVALENTES por dia; el gas ya viene /5,7
+        # desde la fuente). Conceptos: solo los 3 sumables. Proceso: el gas de CONSUMO no es
+        # produccion (medido: 28,0 de 90,7 en abril) -> solo VENTA-GRAVABLE para GAS.
+        # El comentario anterior ("los demas procesos van en NULL") era falso para gas.
+        # Resultado en kboepd (CAUDAL). Reproduce DATOS_MES exacto (plan v2 §1 H1-H4).
         pm = dict(base); pm["fin"] = fin
         kpi = {}
         for r in c.execute(_bind(f"""
-            SELECT tp.nombre prod, es.nombre esc, SUM(m.volumen) vol
+            SELECT tp.nombre prod, es.nombre esc, SUM(m.bpdeq_m) vol
             FROM core.fact_produccion_mes_ecp m
             JOIN core.dim_tipo_producto tp ON tp.tipo_producto_id = m.tipo_producto_id
             JOIN core.dim_escenario es ON es.escenario_id = m.escenario_id
-            WHERE m.fecha = :fin AND es.nombre IN ('REAL','PPTO') AND {where('m')}
+            JOIN core.dim_concepto co ON co.concepto_id = m.concepto_id
+            JOIN core.dim_proceso pr ON pr.proceso_id = m.proceso_id
+            WHERE m.fecha = :fin AND es.nombre IN ('REAL','PPTO')
+              AND {_u.SQL_CONCEPTOS} AND m.grupo_prod = 'ECOPETROL' AND {_u.SQL_PROCESO_GAS}
+              AND {_u.SQL_ULTIMO_REPORTE_M}
+              AND {where('m')}
             GROUP BY 1, 2""", pm), pm):
-            kpi.setdefault(r[0], {})[r[1]] = float(r[2] or 0)
+            kpi.setdefault(r[0], {})[r[1]] = _u.kboepd_mes(r[2] or 0)
 
         # --- Módulo 2: curva diaria REAL (SOLO forma/tendencia — NO alimenta los KPIs, H2) ---
         # H2: día y mes usan MEDIDAS distintas para algunos productos (BLANCOS: día≈1.9M vs mes≈0.9M).
@@ -576,17 +588,37 @@ def desempeno(entidad: str | None = Query(None), segmento: str = Query("ecp"),
         curva_fechas, dias_rep = [], 0
         if aplica_diario:
             pd = dict(base); pd["ini"] = c_ini; pd["fin"] = c_fin
+            # [BEQ-2026-09-08] Diario: vol_estimado (la unica medida que reconcilia con el mensual,
+            # plan v2 §1 H3), 3 conceptos, ECOPETROL. Gas /5,7 y todo /1000 -> kboepd del dia.
             rows = c.execute(_bind(f"""
-                SELECT d.fecha, tp.nombre prod, SUM(d.volumen) vol
+                SELECT d.fecha, tp.nombre prod, SUM(d.vol_estimado) vol
                 FROM core.fact_produccion_dia_ecp d
                 JOIN core.dim_tipo_producto tp ON tp.tipo_producto_id = d.tipo_producto_id
-                WHERE d.fecha BETWEEN :ini AND :fin AND {where('d')}
+                JOIN core.dim_concepto co ON co.concepto_id = d.concepto_id
+                WHERE d.fecha BETWEEN :ini AND :fin AND {_u.SQL_CONCEPTOS}
+                  AND d.grupo_prod = 'ECOPETROL' AND {_u.SQL_ULTIMO_REPORTE_D}
+                  AND {where('d')}
                 GROUP BY 1, 2 ORDER BY 1""", pd), pd).all()
             for f, prod, vol in rows:
                 iso = f.isoformat()
-                curva.setdefault(iso, {})[prod] = float(vol or 0)
+                curva.setdefault(iso, {})[prod] = _u.kboepd_dia(vol or 0, prod)
             curva_fechas = sorted(curva.keys())
             dias_rep = len(curva_fechas)
+
+            # [P4-2026-09-08] BLANCOS: el mensual NO reconcilia (bpdeq_m da 3,3 donde DATOS_MES dice
+            # 13,4 — deuda "blancos x2", variables_cuantificables.yaml:154). El DIARIO sí: 13,4 = 13,4
+            # medido en agosto. Se sustituye SOLO el REAL de BLANCOS por el promedio diario del mes.
+            # El PPTO se deja como está: no hay presupuesto a grano día (el fact diario no tiene
+            # escenario_id) y el cumplimiento con la base vieja mentiría menos que sin base.
+            #
+            # ⚠️ LIMITE: solo aplica a meses con detalle diario en el reporte. Un .xlsm trae el diario
+            # de SU mes (medido: el reporte del 2-sep trae agosto completo y 5 días de julio), así que
+            # en meses sin diario BLANCOS se queda con el valor mensual, que está subestimado. Se exige
+            # cobertura >= 80% del mes para no promediar 3 días sueltos y llamarlo el mes.
+            _bl = [curva[f]["BLANCOS"] for f in curva_fechas
+                   if curva.get(f, {}).get("BLANCOS")]
+            if _bl and kpi.get("BLANCOS") and len(_bl) >= 0.8 * dim:
+                kpi["BLANCOS"]["REAL"] = round(sum(_bl) / len(_bl), 1)
 
         productos = ["CRUDO", "GAS", "BLANCOS"]
         por_producto = []
@@ -606,35 +638,45 @@ def desempeno(entidad: str | None = Query(None), segmento: str = Query("ecp"),
         # (gráfico izquierdo) es la que muestra el ritmo por día y su promedio diario real.
         ritmo = {"meses": [], "meses_num": [], "series": {}, "promedio_mes": {}, "promedio_dia": {}, "mes_actual": mo}
         pr = dict(base); pr["yy"] = y
+        # [BEQ-2026-09-08] Mismo contrato que el Modulo 1: bpdeq_m, 3 conceptos, ECP, gas VENTA-GRAVABLE.
         mrows = c.execute(_bind(f"""
-            SELECT EXTRACT(month FROM m.fecha)::int AS mes, tp.nombre AS prod, SUM(m.volumen) AS vol
+            SELECT EXTRACT(month FROM m.fecha)::int AS mes, tp.nombre AS prod, SUM(m.bpdeq_m) AS vol
             FROM core.fact_produccion_mes_ecp m
             JOIN core.dim_tipo_producto tp ON tp.tipo_producto_id = m.tipo_producto_id
             JOIN core.dim_escenario es ON es.escenario_id = m.escenario_id
-            WHERE es.nombre = 'REAL' AND EXTRACT(year FROM m.fecha) = :yy AND {where('m')}
+            JOIN core.dim_concepto co ON co.concepto_id = m.concepto_id
+            JOIN core.dim_proceso pr ON pr.proceso_id = m.proceso_id
+            WHERE es.nombre = 'REAL' AND EXTRACT(year FROM m.fecha) = :yy
+              AND {_u.SQL_CONCEPTOS} AND m.grupo_prod = 'ECOPETROL' AND {_u.SQL_PROCESO_GAS}
+              AND {_u.SQL_ULTIMO_REPORTE_M}
+              AND {where('m')}
             GROUP BY 1, 2 ORDER BY 1""", pr), pr).all()
-        real_mes = {}      # {mes: {prod: vol}}
+        real_mes = {}      # {mes: {prod: kboepd}}
         for _mes, _prod, _vol in mrows:
-            real_mes.setdefault(int(_mes), {})[_prod] = float(_vol or 0)
+            real_mes.setdefault(int(_mes), {})[_prod] = _u.kboepd_mes(_vol or 0)
         meses_ord = sorted(real_mes.keys())
         ritmo["meses"] = [MESES_ES[m][:3] for m in meses_ord]
         ritmo["meses_num"] = meses_ord
         for p in productos:
-            ritmo["series"][p] = [round(real_mes[m][p]) if real_mes.get(m, {}).get(p) else None
-                                  for m in meses_ord]
+            ritmo["series"][p] = [round(real_mes[m][p], 1) if real_mes.get(m, {}).get(p) else None
+                                  for m in meses_ord]   # [BEQ] 1 decimal: kboepd
             # promedio mensual = media de los meses CERRADOS (anteriores al actual) = hist_prom
             cerr = [(m, real_mes[m][p]) for m in meses_ord if m < mo and real_mes.get(m, {}).get(p)]
-            ritmo["promedio_mes"][p] = round(sum(v for _m, v in cerr) / len(cerr)) if cerr else None
+            ritmo["promedio_mes"][p] = round(sum(v for _m, v in cerr) / len(cerr), 1) if cerr else None
             # promedio DIARIO del año = Σ REAL meses cerrados ÷ Σ días. Es la referencia "vs 2026" de la
             # curva diaria; sale del REAL mensual (fuente de verdad). SOLO se entrega si la curva diaria de
             # ESTE producto RECONCILIA con el mensual (GAS/CRUDO sí; BLANCOS no — su curva diaria suma 4
             # conceptos-copia → ×4 vs el mensual, ver INGESTA/Rep_Prod/HALLAZGO_concepto_multiplicidad.md).
             # Cuando no reconcilia, el frontend cae a la media del mes y su título NO dice "vs 2026".
             _dd = sum(calendar.monthrange(y, _m)[1] for _m, _ in cerr)
-            _mtd_dia = sum(v for v in series.get(p, []) if v)                    # acumulado de la curva del mes
-            _esp = (kpi.get(p, {}).get("REAL", 0.0) * (dias_rep / dim)) if dim else 0.0  # MTD esperado (mensual)
+            _mtd_dia = sum(v for v in series.get(p, []) if v)                    # Σ kboepd de los dias = kbbl-eq MTD
+            # [BEQ-2026-09-08] REAL mensual ya es CAUDAL (kboepd): el MTD esperado es caudal x dias
+            # reportados (antes: volumen x fraccion del mes). Plan v2 §1 H8.
+            _esp = (kpi.get(p, {}).get("REAL", 0.0) * dias_rep) if dim else 0.0
             _reconc = _esp > 0 and _mtd_dia <= _esp * 1.15
-            ritmo["promedio_dia"][p] = round(sum(v for _m, v in cerr) / _dd) if (_dd and _reconc) else None
+            # [BEQ] promedio diario del anio = media de caudales mensuales PONDERADA por dias.
+            ritmo["promedio_dia"][p] = (round(sum(v * calendar.monthrange(y, _m)[1] for _m, v in cerr) / _dd, 1)
+                                        if (_dd and _reconc) else None)
 
         # D-A4 (2026-07-16): rollup honesto del ACTIVO. El PPTO se carga POR CAMPO, y hay campos que
         # producen SIN meta asignada (15 de 128 en crudo/may-2026 = 1.4% del volumen; en el activo
@@ -696,18 +738,26 @@ def escenario_mes(entidad: str, nivel: str | None = None, periodo: str | None = 
         if vid is not None:
             cond.append("m.vice_id = :vid"); params["vid"] = vid
         whr = "(" + " OR ".join(cond) + ")" if cond else "TRUE"
+        # [BEQ-2026-09-08] Lector NO-endpoint: alimenta "vs el operativo" y "contra el contable".
+        # Cambia junto con los otros 20 (plan v2 §1 H7) o el cumplimiento contra el cierre contable
+        # -la cifra oficial auditada- sale absurdo.
         t = sa.text(f"""
-            SELECT tp.nombre prod, es.nombre esc, SUM(m.volumen) vol
+            SELECT tp.nombre prod, es.nombre esc, SUM(m.bpdeq_m) vol
             FROM core.fact_produccion_mes_ecp m
             JOIN core.dim_tipo_producto tp ON tp.tipo_producto_id = m.tipo_producto_id
             JOIN core.dim_escenario es ON es.escenario_id = m.escenario_id
-            WHERE m.fecha = :fin AND es.nombre IN :escs AND {whr}
+            JOIN core.dim_concepto co ON co.concepto_id = m.concepto_id
+            JOIN core.dim_proceso pr ON pr.proceso_id = m.proceso_id
+            WHERE m.fecha = :fin AND es.nombre IN :escs
+              AND {_u.SQL_CONCEPTOS} AND m.grupo_prod = 'ECOPETROL' AND {_u.SQL_PROCESO_GAS}
+              AND {_u.SQL_ULTIMO_REPORTE_M}
+              AND {whr}
             GROUP BY 1, 2""").bindparams(sa.bindparam("escs", expanding=True))
         if ids:
             t = t.bindparams(sa.bindparam("ids", expanding=True))
         out = {}
         for prod, esc, vol in c.execute(t, params):
-            out.setdefault(prod, {})[esc] = float(vol or 0)
+            out.setdefault(prod, {})[esc] = _u.kboepd_mes(vol or 0)
         return out
 
 
@@ -731,7 +781,7 @@ def _estado(pct):
 # L127-130) — se declara en código. GAS = MSCF (miles de pies cúbicos estándar, decisión del
 # usuario 2026-07-21); CRUDO/BLANCOS en barriles.
 # ============================================================================
-_UNIDADES_PRODUCTO = {"CRUDO": "bbl", "BLANCOS": "bbl", "GAS": "MSCF"}
+_UNIDADES_PRODUCTO = dict(_u.UNIDADES_PRODUCTO)   # [BEQ-2026-09-08] todos kboepd
 
 def _estado_cierre(proyectado, meta):
     """alineado (>=meta) / ajustado (>=meta*umbral_ambar) / actuar (por debajo) / "" (sin meta)."""
@@ -924,11 +974,13 @@ def _valle_diagnostico_entidad(c, entidad, ids, vid, valle, y, mo, dim, onset):
     # (B) descomposición por POZO: avg en días del valle vs avg en el resto del mes
     q = sa.text(f"""
         WITH dd AS (
-          SELECT f.nombre pozo, d.fecha, SUM(d.volumen) v
+          SELECT f.nombre pozo, d.fecha, SUM(d.vol_estimado) / 1000.0 v
           FROM core.fact_produccion_dia_ecp d
           JOIN core.dim_tipo_producto tp ON tp.tipo_producto_id = d.tipo_producto_id
           JOIN core.dim_fuente f ON f.fuente_id = d.fuente_id
+          JOIN core.dim_concepto co ON co.concepto_id = d.concepto_id
           WHERE tp.nombre='CRUDO' AND d.fecha BETWEEN :ini AND :fin AND {where_d}
+            AND {_u.SQL_CONCEPTOS} AND d.grupo_prod = 'ECOPETROL' AND {_u.SQL_ULTIMO_REPORTE_D}
           GROUP BY 1, 2)
         SELECT pozo,
           AVG(v) FILTER (WHERE fecha BETWEEN :desde AND :hasta)     AS avg_valle,
@@ -1237,13 +1289,18 @@ def desempeno_insight(entidad: str | None = Query(None), segmento: str = Query("
         pm = dict(base); pm["fin"] = fin
         kpi = {}
         for r in c.execute(_b(f"""
-            SELECT tp.nombre, es.nombre, SUM(m.volumen)
+            SELECT tp.nombre, es.nombre, SUM(m.bpdeq_m)
             FROM core.fact_produccion_mes_ecp m
             JOIN core.dim_tipo_producto tp ON tp.tipo_producto_id = m.tipo_producto_id
             JOIN core.dim_escenario es ON es.escenario_id = m.escenario_id
-            WHERE m.fecha = :fin AND es.nombre IN ('REAL','PPTO') AND {where('m')}
+            JOIN core.dim_concepto co ON co.concepto_id = m.concepto_id
+            JOIN core.dim_proceso pr ON pr.proceso_id = m.proceso_id
+            WHERE m.fecha = :fin AND es.nombre IN ('REAL','PPTO')
+              AND {_u.SQL_CONCEPTOS} AND m.grupo_prod = 'ECOPETROL' AND {_u.SQL_PROCESO_GAS}
+              AND {_u.SQL_ULTIMO_REPORTE_M}
+              AND {where('m')}
             GROUP BY 1,2"""), pm):
-            kpi.setdefault(r[0], {})[r[1]] = float(r[2] or 0)
+            kpi.setdefault(r[0], {})[r[1]] = _u.kboepd_mes(r[2] or 0)   # [BEQ-2026-09-08]
         titular = []
         for p in ["CRUDO", "GAS", "BLANCOS"]:
             real = kpi.get(p, {}).get("REAL", 0.0); ppto = kpi.get(p, {}).get("PPTO", 0.0)
@@ -1253,11 +1310,13 @@ def desempeno_insight(entidad: str | None = Query(None), segmento: str = Query("
         # serie crudo diaria → detección de valle
         pd = dict(base); pd["ini"] = ini; pd["fin"] = fin
         srows = c.execute(_b(f"""
-            SELECT d.fecha, SUM(d.volumen)
+            SELECT d.fecha, SUM(d.vol_estimado) / 1000.0
             FROM core.fact_produccion_dia_ecp d
             JOIN core.dim_tipo_producto tp ON tp.tipo_producto_id = d.tipo_producto_id
+            JOIN core.dim_concepto co ON co.concepto_id = d.concepto_id
             WHERE tp.nombre='CRUDO' AND d.fecha BETWEEN :ini AND :fin AND {where('d')}
-            GROUP BY 1 ORDER BY 1"""), pd).all()
+              AND {_u.SQL_CONCEPTOS} AND d.grupo_prod = 'ECOPETROL' AND {_u.SQL_ULTIMO_REPORTE_D}
+            GROUP BY 1 ORDER BY 1"""), pd).all()   # [BEQ-2026-09-08] kboepd
         serie = [(r[0].isoformat(), float(r[1] or 0)) for r in srows]
         valle = _detectar_valle(serie)
         curva_crudo = {"fechas": [f for f, _ in serie], "valores": [v for _, v in serie]}
@@ -1288,14 +1347,18 @@ def desempeno_insight(entidad: str | None = Query(None), segmento: str = Query("
             pg = dict(base); pg["fin"] = fin; pg["prod"] = peor["producto"]
             grows = c.execute(_b(f"""
                 SELECT COALESCE(NULLIF(TRIM(f.campo),''), f.nombre) AS campo,
-                       SUM(CASE WHEN es.nombre='REAL' THEN m.volumen ELSE 0 END) AS vreal,
-                       SUM(CASE WHEN es.nombre='PPTO' THEN m.volumen ELSE 0 END) AS vppto
+                       SUM(CASE WHEN es.nombre='REAL' THEN m.bpdeq_m ELSE 0 END) / 1000.0 AS vreal,
+                       SUM(CASE WHEN es.nombre='PPTO' THEN m.bpdeq_m ELSE 0 END) / 1000.0 AS vppto
                 FROM core.fact_produccion_mes_ecp m
                 JOIN core.dim_tipo_producto tp ON tp.tipo_producto_id = m.tipo_producto_id
                 JOIN core.dim_escenario es ON es.escenario_id = m.escenario_id
                 JOIN core.dim_fuente f ON f.fuente_id = m.fuente_id
+                JOIN core.dim_concepto co ON co.concepto_id = m.concepto_id
+                JOIN core.dim_proceso pr ON pr.proceso_id = m.proceso_id
                 WHERE m.fecha = :fin AND es.nombre IN ('REAL','PPTO') AND tp.nombre = :prod AND {where('m')}
-                GROUP BY 1"""), pg).all()
+                  AND {_u.SQL_CONCEPTOS} AND m.grupo_prod = 'ECOPETROL' AND {_u.SQL_PROCESO_GAS}
+              AND {_u.SQL_ULTIMO_REPORTE_M}
+                GROUP BY 1"""), pg).all()   # [BEQ-2026-09-08] kboepd
             difs = [((r[0] or "").strip(), float(r[1] or 0) - float(r[2] or 0))
                     for r in grows if (r[1] or r[2])]
             gap_detr = [{"campo": k, "gap": round(v)} for k, v in sorted(difs, key=lambda x: x[1])[:3] if v < 0]
@@ -1357,7 +1420,7 @@ def desempeno_insight(entidad: str | None = Query(None), segmento: str = Query("
         if anotaciones:
             anotaciones["banda"]["label"] = "valle"   # label corto y fijo (no prosa del LLM → no se corta)
             mv = anotaciones["punto"]["valor"]
-            anotaciones["punto"]["label"] = f"mín · {mv/1e6:.2f}M"
+            anotaciones["punto"]["label"] = f"mín · {mv:.1f} kboepd"   # [BEQ-2026-09-08]
 
         # acciones (intents Python; label estático MVP)
         acciones = []
@@ -1745,13 +1808,18 @@ def ejecutivo(entidad: str | None = Query(None), segmento: str = Query("ecp"),
         pm = dict(base); pm["fin"] = fin
         kpi = {}
         for r in c.execute(_b(f"""
-            SELECT tp.nombre, es.nombre, SUM(m.volumen)
+            SELECT tp.nombre, es.nombre, SUM(m.bpdeq_m)
             FROM core.fact_produccion_mes_ecp m
             JOIN core.dim_tipo_producto tp ON tp.tipo_producto_id = m.tipo_producto_id
             JOIN core.dim_escenario es ON es.escenario_id = m.escenario_id
-            WHERE m.fecha = :fin AND es.nombre IN ('REAL','PPTO') AND {where('m')}
+            JOIN core.dim_concepto co ON co.concepto_id = m.concepto_id
+            JOIN core.dim_proceso pr ON pr.proceso_id = m.proceso_id
+            WHERE m.fecha = :fin AND es.nombre IN ('REAL','PPTO')
+              AND {_u.SQL_CONCEPTOS} AND m.grupo_prod = 'ECOPETROL' AND {_u.SQL_PROCESO_GAS}
+              AND {_u.SQL_ULTIMO_REPORTE_M}
+              AND {where('m')}
             GROUP BY 1,2"""), pm):
-            kpi.setdefault(r[0], {})[r[1]] = float(r[2] or 0)
+            kpi.setdefault(r[0], {})[r[1]] = _u.kboepd_mes(r[2] or 0)   # [BEQ-2026-09-08]
         _et = {"ok": "Alineado", "warn": "Rezagado", "alert": "Foco", "": "—"}
         titular = []
         for p in ["CRUDO", "GAS", "BLANCOS"]:
@@ -1764,11 +1832,13 @@ def ejecutivo(entidad: str | None = Query(None), segmento: str = Query("ecp"),
         # serie crudo diaria -> valle (INS-A: solo el onset da eventos limpios)
         pd_ = dict(base); pd_["ini"] = ini; pd_["fin"] = fin
         srows = c.execute(_b(f"""
-            SELECT d.fecha, SUM(d.volumen)
+            SELECT d.fecha, SUM(d.vol_estimado) / 1000.0
             FROM core.fact_produccion_dia_ecp d
             JOIN core.dim_tipo_producto tp ON tp.tipo_producto_id = d.tipo_producto_id
+            JOIN core.dim_concepto co ON co.concepto_id = d.concepto_id
             WHERE tp.nombre='CRUDO' AND d.fecha BETWEEN :ini AND :fin AND {where('d')}
-            GROUP BY 1 ORDER BY 1"""), pd_).all()
+              AND {_u.SQL_CONCEPTOS} AND d.grupo_prod = 'ECOPETROL' AND {_u.SQL_ULTIMO_REPORTE_D}
+            GROUP BY 1 ORDER BY 1"""), pd_).all()   # [BEQ-2026-09-08] kboepd
         serie = [(r[0].isoformat(), float(r[1] or 0)) for r in srows]
         valle = _detectar_valle(serie)
         eventos, eventos_extra = [], {"campos": 0, "pozos_aprox": 0}
@@ -1803,17 +1873,21 @@ def ejecutivo(entidad: str | None = Query(None), segmento: str = Query("ecp"),
         # el mes) -> Blancos queda solo con la proyección mensual.
         pace_por_prod = {}
         for _nom, _nd, _mtd in c.execute(_b(f"""
-                SELECT tp.nombre, COUNT(DISTINCT d.fecha), SUM(d.volumen)
+                SELECT tp.nombre, COUNT(DISTINCT d.fecha), SUM(d.vol_estimado)
                 FROM core.fact_produccion_dia_ecp d
                 JOIN core.dim_tipo_producto tp ON tp.tipo_producto_id = d.tipo_producto_id
+                JOIN core.dim_concepto co ON co.concepto_id = d.concepto_id
                 WHERE d.fecha BETWEEN :ini AND :fin AND {where('d')}
+                  AND {_u.SQL_CONCEPTOS} AND d.grupo_prod = 'ECOPETROL' AND {_u.SQL_ULTIMO_REPORTE_D}
                 GROUP BY 1"""), pd_).all():
-            _nd = int(_nd or 0); _mtd = float(_mtd or 0)
+            _nd = int(_nd or 0); _mtd = _u.kboepd_dia(_mtd or 0, _nom)        # Σ kboepd de los dias (kbbl-eq MTD)
             _real = kpi.get(_nom, {}).get("REAL", 0.0); _ppto = kpi.get(_nom, {}).get("PPTO", 0.0)
             _rest = dim - _nd
-            if _nd and _rest > 0 and _ppto and _real and _mtd <= _real * 1.05:
-                _prom = _mtd / _nd; _req = (_ppto - _mtd) / _rest
-                pace_por_prod[_nom] = {"promedio_dia": round(_prom), "requerido_dia": round(_req),
+            # [BEQ-2026-09-08] _real/_ppto son CAUDALES (kboepd); _mtd es VOLUMEN del mes (kboepd·dia).
+            # La guarda y el requerido se calculan caudal contra caudal (plan v2 §1 H8).
+            if _nd and _rest > 0 and _ppto and _real and (_mtd / _nd) <= _real * 1.05:
+                _prom = _mtd / _nd; _req = (_ppto * dim - _mtd) / _rest
+                pace_por_prod[_nom] = {"promedio_dia": round(_prom, 1), "requerido_dia": round(_req, 1),
                                        "delta_pct": (round((_req / _prom - 1) * 100, 1) if _prom else None)}
 
         # Histórico del AÑO en curso por producto: promedio de los meses ANTERIORES con REAL. Base
@@ -1822,14 +1896,18 @@ def ejecutivo(entidad: str | None = Query(None), segmento: str = Query("ecp"),
         hist_anio = {}
         _h = {}                                     # {prod: {mes:int -> vol:float}}
         for _nom, _mm, _v in c.execute(_b(f"""
-                SELECT tp.nombre, EXTRACT(month FROM m.fecha)::int, SUM(m.volumen)
+                SELECT tp.nombre, EXTRACT(month FROM m.fecha)::int, SUM(m.bpdeq_m)
                 FROM core.fact_produccion_mes_ecp m
                 JOIN core.dim_tipo_producto tp ON tp.tipo_producto_id = m.tipo_producto_id
                 JOIN core.dim_escenario es ON es.escenario_id = m.escenario_id
+                JOIN core.dim_concepto co ON co.concepto_id = m.concepto_id
+                JOIN core.dim_proceso pr ON pr.proceso_id = m.proceso_id
                 WHERE es.nombre = 'REAL' AND EXTRACT(year FROM m.fecha) = :hy
                   AND EXTRACT(month FROM m.fecha) < :hmo AND {where('m')}
+                  AND {_u.SQL_CONCEPTOS} AND m.grupo_prod = 'ECOPETROL' AND {_u.SQL_PROCESO_GAS}
+              AND {_u.SQL_ULTIMO_REPORTE_M}
                 GROUP BY 1, 2"""), {**base, "hy": y, "hmo": mo}).all():
-            _v = float(_v or 0)
+            _v = _u.kboepd_mes(_v or 0)   # [BEQ-2026-09-08]
             if _v > 0:
                 _h.setdefault(_nom, {})[int(_mm)] = _v
         for _nom, _vals in _h.items():
@@ -1842,14 +1920,18 @@ def ejecutivo(entidad: str | None = Query(None), segmento: str = Query("ecp"),
             pg = dict(base); pg["fin"] = fin; pg["prod"] = producto
             grows = c.execute(_b(f"""
                 SELECT COALESCE(NULLIF(TRIM(f.campo),''), f.nombre) AS campo,
-                       SUM(CASE WHEN es.nombre='REAL' THEN m.volumen ELSE 0 END) AS vreal,
-                       SUM(CASE WHEN es.nombre='PPTO' THEN m.volumen ELSE 0 END) AS vppto
+                       SUM(CASE WHEN es.nombre='REAL' THEN m.bpdeq_m ELSE 0 END) / 1000.0 AS vreal,
+                       SUM(CASE WHEN es.nombre='PPTO' THEN m.bpdeq_m ELSE 0 END) / 1000.0 AS vppto
                 FROM core.fact_produccion_mes_ecp m
                 JOIN core.dim_tipo_producto tp ON tp.tipo_producto_id = m.tipo_producto_id
                 JOIN core.dim_escenario es ON es.escenario_id = m.escenario_id
                 JOIN core.dim_fuente f ON f.fuente_id = m.fuente_id
+                JOIN core.dim_concepto co ON co.concepto_id = m.concepto_id
+                JOIN core.dim_proceso pr ON pr.proceso_id = m.proceso_id
                 WHERE m.fecha = :fin AND es.nombre IN ('REAL','PPTO') AND tp.nombre = :prod AND {where('m')}
-                GROUP BY 1"""), pg).all()
+                  AND {_u.SQL_CONCEPTOS} AND m.grupo_prod = 'ECOPETROL' AND {_u.SQL_PROCESO_GAS}
+              AND {_u.SQL_ULTIMO_REPORTE_M}
+                GROUP BY 1"""), pg).all()   # [BEQ-2026-09-08] kboepd
             # (campo, dif, real, ppto) — conservamos real y ppto por campo para el gráfico Meta vs Real
             difs = [((r[0] or "").strip(), float(r[1] or 0) - float(r[2] or 0),
                      float(r[1] or 0), float(r[2] or 0))
@@ -1886,16 +1968,16 @@ def ejecutivo(entidad: str | None = Query(None), segmento: str = Query("ecp"),
                 # lista el detalle son BRUTOS. Sin estos dos totales el panel mostraba "-10.813.358"
                 # con un detalle que sumaba 19.814.696 y nada explicaba la diferencia. Con ellos,
                 # faltante_bruto + excedente_bruto = gap_total_campos (aritmética auditable).
-                "faltante_bruto": round(gap_detr_total),
-                "excedente_bruto": round(gap_comp_total),
+                "faltante_bruto": round(gap_detr_total, 1),    # [BEQ] kboepd: 1 decimal
+                "excedente_bruto": round(gap_comp_total, 1),
                 # gap se conserva (lo usan ctx/fallback); real/meta se agregan para los gráficos.
                 # eventos = fuente/soporte real (Épica 1 criterio 2) vía _comentarios_campo_mes.
-                "detractores": [{"campo": d[0], "gap": round(d[1]), "real": round(d[2]), "meta": round(d[3]),
+                "detractores": [{"campo": d[0], "gap": round(d[1], 1), "real": round(d[2], 1), "meta": round(d[3], 1),
                                   "eventos": _comentarios_campo_mes(c, d[0], ini, fin)}
                                 for d in detr],
-                "compensadores": [{"campo": d[0], "gap": round(d[1]), "real": round(d[2]), "meta": round(d[3])}
+                "compensadores": [{"campo": d[0], "gap": round(d[1], 1), "real": round(d[2], 1), "meta": round(d[3], 1)}
                                   for d in comp],
-                "extremos": [{"campo": d[0], "real": round(d[2]), "meta": round(d[3])} for d in _ext],
+                "extremos": [{"campo": d[0], "real": round(d[2], 1), "meta": round(d[3], 1)} for d in _ext],
             }
 
         # F2 en ECP (2026-07-16, ya probado en _ejecutivo_filiales): el desglose por campo se calcula
@@ -2122,7 +2204,7 @@ def _fil_intermedios(c):
         anotaciones = {
             "banda": {"desde": valle["desde"], "hasta": valle["hasta"], "label": "valle"},
             "punto": {"fecha": valle["min_fecha"], "valor": valle["min_valor"],
-                      "label": f"mín · {valle['min_valor']/1e6:.2f}M"},
+                      "label": f"mín · {valle['min_valor']:.1f} kboepd"},   # [BEQ-2026-09-08]
         }
 
     # Descomposición del gap por EMPRESA (misma-ventana). F2: se calcula para TODOS los productos.
@@ -2619,7 +2701,7 @@ def _fil_serie_mensual(c, empresa_id, cur_y, cur_mo):
             proy_idx = len(meses) - 1
     series = {p: v for p, v in series.items() if any(x is not None for x in v)}   # quita productos sin dato
     return {"meses": meses, "series": series, "proyectado_idx": proy_idx,
-            "unidades": {"CRUDO": "bbl", "GAS": "MSCF", "BLANCOS": "bbl"}}
+            "unidades": dict(_u.UNIDADES_PRODUCTO)}   # [BEQ-2026-09-08]
 
 
 @router.get("/president")
@@ -2766,11 +2848,13 @@ def produccion_dia(entidad: str, fecha, nivel: str | None = None) -> dict:
 
         p = dict(params); p["f"] = str(fecha)
         rows = c.execute(_b(f"""
-            SELECT tp.nombre prod, SUM(d.volumen) vol
+            SELECT tp.nombre prod, SUM(d.vol_estimado) vol
             FROM core.fact_produccion_dia_ecp d
             JOIN core.dim_tipo_producto tp ON tp.tipo_producto_id = d.tipo_producto_id
-            WHERE d.fecha = :f AND {whr} GROUP BY 1"""), p)
-        por = {k: float(v or 0) for k, v in rows}
+            JOIN core.dim_concepto co ON co.concepto_id = d.concepto_id
+            WHERE d.fecha = :f AND {whr}
+              AND {_u.SQL_CONCEPTOS} AND d.grupo_prod = 'ECOPETROL' AND {_u.SQL_ULTIMO_REPORTE_D} GROUP BY 1"""), p)
+        por = {k: _u.kboepd_dia(v or 0, k) for k, v in rows}   # [BEQ-2026-09-08]
         techo = c.execute(_b(
             f"SELECT MAX(d.fecha) FROM core.fact_produccion_dia_ecp d WHERE {whr}"), params).scalar()
         # hay_dato = hay alguna fila CON volumen > 0 (una fila en 0 no es "dato del día").
@@ -2794,14 +2878,16 @@ def curva_dia_mes(entidad: str, anio: int, mes: int, producto: str,
         p.update({"ini": f"{anio:04d}-{mes:02d}-01",
                   "fin": f"{anio:04d}-{mes:02d}-{dim:02d}", "p": producto.upper()})
         t = sa.text(f"""
-            SELECT d.fecha, SUM(d.volumen) vol
+            SELECT d.fecha, SUM(d.vol_estimado) vol
             FROM core.fact_produccion_dia_ecp d
             JOIN core.dim_tipo_producto tp ON tp.tipo_producto_id = d.tipo_producto_id
+            JOIN core.dim_concepto co ON co.concepto_id = d.concepto_id
             WHERE d.fecha BETWEEN :ini AND :fin AND UPPER(tp.nombre) = :p AND {whr}
-            GROUP BY d.fecha ORDER BY d.fecha""")
+              AND {_u.SQL_CONCEPTOS} AND d.grupo_prod = 'ECOPETROL' AND {_u.SQL_ULTIMO_REPORTE_D}
+            GROUP BY d.fecha ORDER BY d.fecha""")   # [BEQ-2026-09-08]
         if ids:
             t = t.bindparams(sa.bindparam("ids", expanding=True))
-        return [(f, float(v or 0)) for f, v in c.execute(t, p)]
+        return [(f, _u.kboepd_dia(v or 0, producto)) for f, v in c.execute(t, p)]   # [BEQ-2026-09-08]
 
 
 def curva_dia_rango(entidad: str, ini, fin, producto: str,
@@ -2826,11 +2912,13 @@ def curva_dia_rango(entidad: str, ini, fin, producto: str,
         p = dict(params)
         p.update({"ini": str(ini), "fin": str(fin), "p": producto.upper()})
         t = sa.text(f"""
-            SELECT d.fecha, SUM(d.volumen) vol
+            SELECT d.fecha, SUM(d.vol_estimado) vol
             FROM core.fact_produccion_dia_ecp d
             JOIN core.dim_tipo_producto tp ON tp.tipo_producto_id = d.tipo_producto_id
+            JOIN core.dim_concepto co ON co.concepto_id = d.concepto_id
             WHERE d.fecha BETWEEN :ini AND :fin AND UPPER(tp.nombre) = :p AND {whr}
-            GROUP BY d.fecha ORDER BY d.fecha""")
+              AND {_u.SQL_CONCEPTOS} AND d.grupo_prod = 'ECOPETROL' AND {_u.SQL_ULTIMO_REPORTE_D}
+            GROUP BY d.fecha ORDER BY d.fecha""")   # [BEQ-2026-09-08]
         if ids:
             t = t.bindparams(sa.bindparam("ids", expanding=True))
-        return [(f, float(v or 0)) for f, v in c.execute(t, p)]
+        return [(f, _u.kboepd_dia(v or 0, producto)) for f, v in c.execute(t, p)]   # [BEQ-2026-09-08]

@@ -184,7 +184,8 @@ def ejecutar_n2(resuelta: dict, slots: dict, _desempeno_fn=None) -> dict:
     if rech:
         return rech
     producto = slots["producto"]
-    unidad = slots.get("unidad", "bbl")
+    from app.core.unidades import UNIDAD_ACUM
+    unidad = UNIDAD_ACUM          # [BEQ-2026-09-08] acumulado = VOLUMEN (kbbl-eq), no caudal
 
     # [2026-09-03 · VENTANA-MESES] «los últimos N meses» acota DÓNDE EMPIEZA el acumulado.
     # Sin ventana, `desde_mes=1` = el YTD de siempre (byte a byte el comportamiento anterior).
@@ -225,9 +226,8 @@ def ejecutar_n2(resuelta: dict, slots: dict, _desempeno_fn=None) -> dict:
     # y el rótulo dirá «junio–julio»: sin esta línea tendría que deducir por qué. Además el ancla
     # es el último día CON REPORTE (~100 días detrás del reloj), no hoy.
     if desde_mes > 1:
-        avisos.append(f"«Los últimos {ven['cantidad']} meses» cuentan hacia atrás desde "
-                      f"{ven['fin']}, el último día con reporte; el acumulado suma los meses "
-                      f"CERRADOS dentro de esa ventana.")
+        avisos.append(f"«Los últimos {ven['cantidad']} meses» son los {ven['cantidad']} meses "
+                      f"cerrados hasta {ven['fin']}; el mes en curso no entra.")   # [BEQ] D8
     if ac.get("en_curso"):
         avisos.append(f"El mes de {ac['en_curso']['nombre']} sigue en curso; su proyección NO está "
                       f"incluida en el acumulado.")
@@ -468,7 +468,7 @@ def ejecutar_n1dser(resuelta: dict, slots: dict, _curva_fn=None, _curva_rango_fn
         "nivel": "N1DSER", "grano": "dia", "universo": "reporte_diario",
         "entidad": {"nombre": resuelta["valor"], "nivel": resuelta.get("nivel"), "fue_asumida": False},
         "entidad_cualificada": _cualificar(resuelta),
-        "producto": producto, "unidad": slots.get("unidad", "bbl"),
+        "producto": producto, "unidad": "kbbl-eq",   # [BEQ-2026-09-08] N1DSER: el total es Σ dias = VOLUMEN
         "resultado": {"valor": total},
         "promedio_dia": total / len(pts),
         # [2026-09-03 · CURVA-VENTANA] Con ventana no hay UN mes que rotular: la curva puede ir

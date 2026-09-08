@@ -20,8 +20,9 @@ _NIVELES_OK = (None, "vicepresidencia")   # None = global ECP. Mismo criterio qu
                                           # economia.py (FC-3/H8): la regla de nivel vive en el módulo.
 
 # Unidades del FACT OPERATIVO (fact_produccion_mes_ecp) — las usa el DECLINAR, cuyas cifras vienen
-# de `analisis.ejecutivo`. Ahí el gas va en volumen crudo y se muestra en MSCF (÷1e6, vía _fmt).
-_UNIDAD = {"CRUDO": "bbl", "GAS": "MSCF", "BLANCOS": "bbl"}   # mismo dict que analizar/plantilla.py
+# de `analisis.ejecutivo`. [BEQ-2026-09-08] Ahora kboepd. OJO: _UNIDAD_VP (abajo) es de la HOJA
+# P50 y NO cambia — nunca llevo ÷1e6 (bug dd8ffa2, test_p50_referencia.py:365-388).
+from app.core.unidades import UNIDADES_PRODUCTO as _UNIDAD
 _PROD_L = {"CRUDO": "crudo", "GAS": "gas", "BLANCOS": "blancos"}
 
 # 🔑 [2026-08-13] La hoja del P50 (`NEW MES-AÑO` t8 «P50 ECP» / t2 «REAL PROMEDIO MES») está en

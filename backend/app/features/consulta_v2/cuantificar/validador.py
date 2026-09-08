@@ -1,8 +1,8 @@
 """cuantificar/validador.py — garantía mecánica de la regla madre + formato del cuerpo (Motor Q v2).
 
-  (a) fmt_valor(n, producto) — literal por producto. CRUDO/BLANCOS: miles es-CO, 0 dec ('10.966.768').
-      GAS: ÷1e6 + "MSCF", replicando __cnGasM del frontend (1 decimal si |m|>=1, si no 2; coma decimal,
-      SIN separador de miles) → coherencia chat↔tablero. El LLM NUNCA toca esto (D-N5).
+  (a) fmt_valor(n, producto) — literal es-CO en kboepd, IGUAL para los tres productos: miles con
+      punto y 1 decimal ('492,4' · '52.430,9' · '0,2'). [BEQ-2026-09-08] El backend ya entrega el
+      valor convertido (ver app/core/unidades.py); aquí no se escala. El LLM NUNCA toca esto (D-N5).
   (b) formatear_cuerpo(res) — cuerpo VERBATIM, ramifica por nivel (N1 mes / N2 acumulado / N3 serie /
       N4 variación) y usa fmt_valor+unidad del contrato (producto-aware). N3/N4 se resuelven ANTES de
       leer res["resultado"]/res["mes"] — esas claves no existen en su contrato (HE6).
@@ -11,19 +11,21 @@
 import re
 
 _TIENE_DIGITO = re.compile(r"\d")
-_UNIDADES = ("barril", "bbl", "mscf", "%", "porcentaje", "presupuesto", "millones", "millón")
+# [BEQ-2026-09-08] Lista negra del intro (H13): se anaden los rotulos nuevos; "mscf" se queda por si
+# un modelo lo arrastra de ejemplos viejos.
+_UNIDADES = ("barril", "bbl", "mscf", "kboepd", "boepd", "beq", "kbbl-eq", "bbl-eq", "equivalente",
+             "%", "porcentaje", "presupuesto", "millones", "millón")
 
 
 def fmt_valor(n, producto) -> str:
-    """Literal es-CO por producto. GAS = ÷1e6 'MSCF' (mirror __cnGasM); CRUDO/BLANCOS = bbl raw."""
-    try:
-        if producto == "gas":
-            m = float(n) / 1e6
-            d = 1 if abs(m) >= 1 else 2
-            return f"{m:.{d}f}".replace(".", ",")
-        return f"{float(n):,.0f}".replace(",", ".")
-    except Exception:
-        return str(n)
+    """Literal es-CO en kboepd, IGUAL para los tres productos: '492,4' · '80,6' · '0,2'.
+
+    [BEQ-2026-09-08] Antes el gas iba en MSCF (÷1e6) y crudo/blancos en bbl. Ahora TODO llega ya
+    en kboepd desde analisis/api.py (contrato §0.2 del plan): aqui solo se formatea. `producto`
+    se conserva en la firma por los ~20 call sites; ya no cambia el formato.
+    """
+    from app.core.unidades import fmt
+    return fmt(n, 1)
 
 
 def formatear_cuerpo(res: dict) -> str:
@@ -72,7 +74,7 @@ def formatear_cuerpo(res: dict) -> str:
         linea = (f"{res['entidad_cualificada']} produjo "
                  f"{fmt_valor(res['resultado']['valor'], prod)} {unidad} de {prod} en "
                  f"{res['mes_label']}, con un promedio de "
-                 f"{fmt_valor(res.get('promedio_dia') or 0, prod)} {unidad}/día "
+                 f"{fmt_valor(res.get('promedio_dia') or 0, prod)} kboepd "
                  f"({res['dias_con_dato']} días con reporte). El detalle día a día está en la gráfica.")
         for a in res.get("avisos", []):
             linea += f" ⚠️ {a}"
@@ -127,6 +129,10 @@ def formatear_cuerpo(res: dict) -> str:
     ppto = fmt_valor(res["referencia_valor"], prod) if res.get("referencia_valor") else None
 
     if nivel == "N2":                                   # ACUMULADO (meses cerrados)
+        # [BEQ-2026-09-08] El acumulado es VOLUMEN (kbbl-eq, D7): formato con miles.
+        from app.core.unidades import fmt as _fmt_u
+        real = _fmt_u(res["resultado"]["valor"], 1)
+        ppto = _fmt_u(res["referencia_valor"], 1) if res.get("referencia_valor") else None
         n = res["meses_cerrados"]
         linea = (f"{res['entidad_cualificada']} acumuló {real} {unidad} de {prod} en "
                  f"{res['periodo_label']} ({n} mes{'es' if n != 1 else ''} cerrado"

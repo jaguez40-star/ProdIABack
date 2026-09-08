@@ -104,7 +104,11 @@ def impacto_historico(campos: list[str] | None = None) -> dict:
         return {"sin_datos": True, "motivo": f"error leyendo diferidas: {e}"}
 
     def _top(idx):
-        vals = [((r[0] or "Sin clasificar"), float(r[idx] or 0)) for r in rows]
+        # [BEQ-2026-09-08] idx 2 = GAS_PERDIDO, misma unidad que la produccion (routes/api.py:707-709):
+        # se convierte a barriles equivalentes con el mismo factor. Resultado en bbl-eq (VOLUMEN).
+        from app.core.unidades import FACTOR_GAS_BEQ
+        _k = FACTOR_GAS_BEQ if idx == 2 else 1.0
+        vals = [((r[0] or "Sin clasificar"), float(r[idx] or 0) / _k) for r in rows]
         vals = [(n, v) for n, v in vals if v > 0]
         tot = sum(v for _, v in vals)
         if not tot:
@@ -178,10 +182,12 @@ def split_planeado(campos: list[str] | None = None) -> dict:
         return {"sin_datos": True, "motivo": f"error leyendo diferidas: {e}"}
 
     def _prod(idx):
+        from app.core.unidades import FACTOR_GAS_BEQ          # [BEQ-2026-09-08] gas -> bbl-eq
+        _k = FACTOR_GAS_BEQ if idx == 2 else 1.0
         np_ = pl_ = 0.0
         for r in rows:
             cat = (r[0] or "").strip().lower()   # 'planeada' | 'no planeada' | 'control de producción' | ''
-            v = float(r[idx] or 0)
+            v = float(r[idx] or 0) / _k
             if cat == "no planeada":
                 np_ += v
             elif cat == "planeada":

@@ -57,7 +57,7 @@ niveles:
 # ===========================================================================
 productos:
   produccion_crudo:
-    unidad: bbl
+    unidad: kboepd                   # [BEQ-2026-09-08] miles de barriles equivalentes por dia
     fuente: INGESTA
     referencias: [REAL, PPTO, OPERATIVO, CONTABLE, P50, promedio_anio]
     granos:
@@ -65,8 +65,8 @@ productos:
       dia:  { confianza: alta, niveles: [N1, N2, N3, N4], nota: "reconcilia 0,99; REAL only" }
 
   produccion_gas:
-    unidad: MSCF                     # ✅ CONFIRMADO por el usuario 2026-08-02 (decisión de dominio)
-    unidad_confirmada: true
+    unidad: kboepd                   # [BEQ-2026-09-08] REVIERTE la decision del 2026-07-21 (D3).
+    unidad_confirmada: true          # gas -> barriles equivalentes, factor 5,7 (ya en bpdeq_m)
     fuente: INGESTA
     referencias: [REAL, PPTO, OPERATIVO, CONTABLE, P50, promedio_anio]
     granos:
@@ -74,7 +74,7 @@ productos:
       dia:  { confianza: alta, niveles: [N1, N2, N3, N4], nota: "REAL only" }
 
   produccion_blancos:
-    unidad: bbl
+    unidad: kboepd                   # [BEQ-2026-09-08]
     fuente: INGESTA
     referencias: [REAL, PPTO, OPERATIVO, CONTABLE, P50, promedio_anio]
     granos:
