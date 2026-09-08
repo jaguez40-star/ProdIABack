@@ -260,7 +260,21 @@ def _panel_datos(res: dict) -> dict:
             _m = res.get("mes") or {}
             d.update({
                 "entidad": res["entidad"]["nombre"],
-                "nivel_entidad": res["entidad"]["nivel"],
+                # [2026-09-08 · FIX-NIVEL-N1] `nivel` PISA al nivel temporal con el de ENTIDAD,
+                # igual que hacen N1DSER (:187) y N1D/N1DSEL (:214). No es un detalle de estilo:
+                # el frontend reenvía esta clave como parámetro HTTP a /analisis/desempeno y
+                # /analisis/ejecutivo (multitab_shell.js:4309,4317), y allí `_ambito()` la usa
+                # para resolver a qué fuentes corresponde la entidad.
+                # 🔑 Medido en el servidor de pruebas (2026-09-08): con "N1" en esta clave,
+                #    `_ambito` no reconoce el valor (analisis/api.py:368-369 solo admite
+                #    fuente/pozo/campo/gerencia/operador) y cae a su rama de compatibilidad
+                #    «sin nivel», que hace un OR sobre nombre+campo+gerencia+operador. El
+                #    resultado fue una tarjeta con 94,7 kbopd donde el texto decía 55,0, y la
+                #    curva vacía. Un fallo SILENCIOSO: no avisa, responde otra cosa con
+                #    seguridad — la familia de bugs que CLAUDE.md §6 marca como la más grave.
+                # 🔑 La clave `nivel_entidad` que estuvo aquí era huérfana: la escribía solo este
+                #    bloque y no la leía NADIE (verificado con grep sobre app/ y el frontend).
+                "nivel": res["entidad"]["nivel"],
                 "segmento": "ecp",
                 "periodo": f"{_MESES_PANEL[_m['mes']]} {_m['anio']}",
                 "productos": [_PROD_DIM.get(res["producto"], "CRUDO")],

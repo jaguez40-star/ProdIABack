@@ -38,8 +38,11 @@ def test_n1_emite_el_panel_de_curva_diaria():
     assert d["periodo"] == "abril 2026"   # el mes de la PREGUNTA, no el del corte — minúscula,
                                            # misma convención que N1D (_MESES_PANEL:61-62)
     assert d["productos"] == ["CRUDO"]
-    assert d["nivel"] == "N1"             # el nivel TEMPORAL no se pisa
-    assert d["nivel_entidad"] == "campo"  # el de la entidad viaja en su propia clave
+    # [2026-09-08 · FIX-NIVEL-N1] `nivel` es el de ENTIDAD, no el temporal. El frontend lo
+    # reenvía a /desempeno y /ejecutivo, que resuelven las fuentes con él; con "N1" caía en la
+    # rama de compatibilidad de `_ambito` y devolvía otras cifras, sin avisar.
+    assert d["nivel"] == "campo"          # el de la entidad, igual que N1D/N1DSER
+    assert "nivel_entidad" not in d       # la clave huérfana no vuelve
 
 
 def test_n1_lleva_la_huella_que_antes_se_descartaba():
