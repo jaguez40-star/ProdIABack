@@ -13,7 +13,7 @@ rob_vicepresidencia`, NUNCA por `dim_vicepresidencia`.
 """
 import sqlalchemy as sa
 
-from app.core.db import get_engine
+from app.core.db import get_engine, get_ops_engine
 from app.features.consulta_v2.cuantificar.validador import fmt_valor
 
 _NIVELES_OK = (None, "vicepresidencia")   # None = global ECP. Mismo criterio que diferidas.py /
@@ -82,21 +82,36 @@ _VP_DE_CAMPO_CACHE: dict = {}
 
 
 def vp_de_campo(campo: str) -> str | None:
-    """core.map_campo_robustez -> rob_vicepresidencia (⚠️ NUNCA rob_gerencia — level-shift ya
-    documentado: lo que INGESTA llama "gerencia" puede ser una VP real en robustez). None si el
-    campo no está en el mapeo o no tiene VP (59 de 139 campos, terceros — A5 del plan).
-    Cacheado en proceso; los errores de conexión NO se cachean (pueden ser transitorios)."""
+    """Campo -> vicepresidencia, LEÍDO DE LA FUENTE ÚNICA DE VERDAD.
+
+    [2026-09-08 · VP-FUENTE-VERDAD] Antes leía `core.map_campo_robustez`, una COPIA dentro de
+    ProdIA que está mal poblada. La fuente de verdad de jerarquías es la BD **robustez_v02**,
+    esquema **ops**, tabla **wells_attributes** — una fila por pozo, con la jerarquía completa
+    `vice_presidency > management > active > field > zone`.
+
+    🔑 Medido el 2026-09-08 contra las dos: la copia tiene 1 de las 19 vicepresidencias reales
+       (`core.dim_vicepresidencia`), y ninguna de las 11 que SÍ tienen P50 estaba en ella. Con
+       la fuente de verdad la cadena completa funciona:
+           CASTILLA -> GAA -> P50 96,8%   ·   RUBIALES -> GOR -> P50 94,3%
+           CUPIAGUA -> PRP -> P50 147,3%  ·   CHICHIMENE -> GCH -> (esa VP no está en la hoja)
+
+    None si el campo no existe allí o no tiene VP. Cacheado en proceso; los errores de
+    conexión NO se cachean (pueden ser transitorios).
+    """
     key = (campo or "").strip().upper()
     if not key:
         return None
     if key in _VP_DE_CAMPO_CACHE:
         return _VP_DE_CAMPO_CACHE[key]
     try:
-        eng = get_engine()
-        with eng.connect() as c:
+        # `get_ops_engine()` es la conexión a robustez_v02 (OPS_DATABASE_URL). El engine por
+        # defecto apunta a daily_report_prod y NO ve el esquema `ops`.
+        with get_ops_engine().connect() as c:
             val = c.execute(sa.text(
-                "SELECT rob_vicepresidencia FROM core.map_campo_robustez "
-                "WHERE UPPER(TRIM(campo)) = UPPER(TRIM(:v))"), {"v": campo}).scalar()
+                "SELECT UPPER(TRIM(vice_presidency)) FROM ops.wells_attributes "
+                "WHERE UPPER(TRIM(field)) = UPPER(TRIM(:v)) "
+                "  AND vice_presidency IS NOT NULL AND TRIM(vice_presidency) NOT IN ('', '0') "
+                "GROUP BY 1 ORDER BY COUNT(*) DESC LIMIT 1"), {"v": campo}).scalar()
     except Exception:
         return None   # transitorio: no se cachea
     _VP_DE_CAMPO_CACHE[key] = val

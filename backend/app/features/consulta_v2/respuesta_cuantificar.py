@@ -147,11 +147,22 @@ def _p50_del_mes(resuelta: dict, res: dict) -> dict | None:
     silenciosos.
     """
     nivel = resuelta.get("nivel")
-    if not _p50.nivel_soportado(nivel, resuelta):
-        return None
     vice = resuelta.get("valor") if nivel == "vicepresidencia" else None
     if nivel == "gerencia":
         vice = (resuelta.get("puente") or {}).get("vp") or None
+    # [2026-09-08 · VP-FUENTE-VERDAD] Un CAMPO toma el P50 de SU vicepresidencia. El P50 no se
+    # define por campo (p50_referencia.py:6-7), pero la jerarquía sí existe en la fuente de
+    # verdad (robustez_v02.ops.wells_attributes) y `vp_de_campo` la resuelve. Medido:
+    # CASTILLA -> GAA (96,8%), RUBIALES -> GOR (94,3%), CUPIAGUA -> PRP (147,3%).
+    # 🔑 Es el compromiso de la VP ENTERA, no del campo — por eso viaja con `alcance`, para que
+    #    el panel lo rotule «Compromiso P50 · VP GAA» y nadie lo lea como el P50 del campo.
+    #    NO entra en el anillo ni en el GAP: esos siguen contra el PPTO del campo, que es lo
+    #    único comparable con su cifra real.
+    alcance = None
+    if not vice and nivel in ("campo", "activo"):
+        vice = _p50.vp_de_campo(resuelta.get("valor") or "")
+        if vice:
+            alcance = f"VP {vice}"
     if not vice:
         return None
     serie = _p50.serie_por_vp(vice, (res.get("producto") or "crudo").upper())
@@ -164,7 +175,8 @@ def _p50_del_mes(resuelta: dict, res: dict) -> dict | None:
     clave = f"{anio:04d}-{num:02d}"
     for punto in serie["serie"]:
         if str(punto.get("fecha", "")).startswith(clave) and punto.get("p50"):
-            return {"valor": float(punto["p50"]) / _P50_BPD_A_KBPD, "label": "P50"}
+            return {"valor": float(punto["p50"]) / _P50_BPD_A_KBPD, "label": "P50",
+                    "alcance": alcance}      # None si la entidad ES la VP; "VP GAA" si es un campo
     return None
 
 
