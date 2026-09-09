@@ -24,6 +24,11 @@ _LEVELS = [
     ("campo",           "SELECT DISTINCT campo    FROM core.dim_fuente          WHERE NULLIF(TRIM(campo),'')    IS NOT NULL", "A"),
     ("activo",          "SELECT DISTINCT activo   FROM core.map_campo_activo    WHERE NULLIF(TRIM(activo),'')   IS NOT NULL", "A"),
     ("gerencia",        "SELECT DISTINCT gerencia FROM core.dim_fuente          WHERE NULLIF(TRIM(gerencia),'') IS NOT NULL", "A"),
+    # [2026-09-09 · BUG1-GERENCIAS] Las gerencias REALES NO salen de aquí: `dim_fuente.gerencia`
+    # tiene 13 valores que son vicepresidencias mal-nombradas (level-shift S28). Vienen de la FUENTE
+    # ÚNICA DE VERDAD (robustez_v02.ops.wells_attributes), que vive en OTRA BD y no se puede
+    # JOIN-ear con core.* — se añaden al índice APARTE, en build_index(), con `gerencias_vigentes()`.
+    # Mismo nivel "gerencia": el frontend ya lo rotula y los 4 consumidores de `puente` no cambian.
     ("operador",        "SELECT DISTINCT operador FROM core.dim_fuente          WHERE NULLIF(TRIM(operador),'') IS NOT NULL", "A"),
     ("vicepresidencia", "SELECT DISTINCT codigo   FROM core.dim_vicepresidencia WHERE NULLIF(TRIM(codigo),'')   IS NOT NULL", "A"),
     ("filial",          "SELECT DISTINCT nombre   FROM core.dim_empresa         WHERE NULLIF(TRIM(nombre),'')   IS NOT NULL", "B"),
@@ -36,13 +41,34 @@ def build_index():
     global _INDEX
     idx = {}
     eng = get_engine()
-    with eng.connect() as c:
+    # [2026-09-09 · BUG1-GERENCIAS] AUTOCOMMIT + try por consulta: una tabla ausente NO tumba el
+    # índice entero (mismo patrón que maquina_q._nombres():519-545).
+    with eng.connect().execution_options(isolation_level="AUTOCOMMIT") as c:
         for nivel, sql, rama in _LEVELS:
-            for (val,) in c.execute(sa.text(sql)):
+            try:
+                filas = list(c.execute(sa.text(sql)))
+            except Exception:
+                continue
+            for (val,) in filas:
                 k = norm(val)
                 if not k:
                     continue
-                idx.setdefault(k, []).append({"nivel": nivel, "rama": rama, "valor": (val or "").strip()})
+                ident = {"nivel": nivel, "rama": rama, "valor": (val or "").strip()}
+                if ident not in idx.setdefault(k, []):   # idempotente: no duplicar identidades
+                    idx[k].append(ident)
+    # [2026-09-09 · BUG1-GERENCIAS] Gerencias REALES desde la FUENTE ÚNICA DE VERDAD. Van APARTE
+    # del bucle porque viven en OTRA BD (robustez_v02) — mismo motivo y patrón que ranking.py:266.
+    # Medido: 20 vigentes, todas con campos en INGESTA. Si ops no está, `gerencias_vigentes()`
+    # devuelve [] y el índice queda como hoy.
+    # 🔑 Mismo nivel "gerencia": un código presente en los dos catálogos (CPV/GAN/GNS/GXO) produce
+    #    la MISMA identidad y el `if ident not in` la deduplica. No hay ambigüedad.
+    for g in gerencias_vigentes():
+        k = norm(g)
+        if not k:
+            continue
+        ident = {"nivel": "gerencia", "rama": "A", "valor": g}
+        if ident not in idx.setdefault(k, []):
+            idx[k].append(ident)
     _INDEX = idx
     return idx
 
@@ -127,7 +153,16 @@ def clave_fisica(ident: dict):
     col = _FUENTE_COL.get(nivel)
     if not col:
         return (nivel, k)
-    return ("F", _get_fuente_sets()[col].get(k, frozenset()))
+    fset = _get_fuente_sets()[col].get(k, frozenset())
+    # [2026-09-09 · BUG1-GERENCIAS] Una gerencia de la FUENTE DE VERDAD no está en dim_fuente →
+    # conjunto físico VACÍO. Un campo homónimo de un tercero también → ambos caían en la misma
+    # clave ('F', frozenset()), `_resolver_colision` veía UN grupo y devolvía "auto" ganando Campo.
+    # El bloque de NIVEL EXPLÍCITO (resolver_unico, modo "ask") nunca se ejecutaba. Con clave
+    # propia son 2 grupos → "ask" → el nivel explícito decide. Hoy no hay colisión real (medido),
+    # pero la política queda correcta. GOR y las de dim_fuente conservan su ('F', {ids}).
+    if nivel == "gerencia" and not fset:
+        return ("GER_ROB", k)
+    return ("F", fset)
 
 
 # --- Prioridad de nivel al colapsar (Campo gana) — FORK de consulta/maquina.py ---
@@ -193,6 +228,70 @@ def _cargar_vp_robustez():
     return _VP_ROBUSTEZ
 
 
+# --- GERENCIAS REALES desde la FUENTE ÚNICA DE VERDAD (BUG1-GERENCIAS, 2026-09-09) ------------
+# 🔴 FUENTE: robustez_v02, esquema ops, tabla wells_attributes. NO `core.map_campo_robustez`
+#    (COPIA que diverge: le sobran 6 de la rama vieja V*, le faltan CPI y GNS, y pierde
+#    CASTILLA ESTE en PPC — medido el 2026-09-09).
+# ⚠️ LOS DOS FILTROS SON OBLIGATORIOS, copiados de ranking.py:277-279 (medidos el 2026-09-03):
+#      1. `vice_presidency NOT LIKE 'V%'` — conviven DOS jerarquías; la rama V* es la VIEJA.
+#      2. `vice_presidency <> '0'`        — filas basura que duplican campos.
+#    Con ellos: 20 gerencias vigentes, las 20 con campos en INGESTA.
+# 🔑 Vive en OTRA BD (get_ops_engine): se lee aparte y se cruza en Python (ranking.py:264-267).
+# 🔑 Degradación con gracia: sin ops (p.ej. el 139) devuelve vacío y las gerencias no resuelven —
+#    el comportamiento de HOY. Nunca lanza. Los errores NO se cachean; un resultado legítimo SÍ.
+_GER_CAMPOS = None   # cache por proceso: {norm(gerencia): [campo, ...]}
+_GER_CANON = None    # cache por proceso: {norm(gerencia): nombre canónico}  (norm pliega la ñ:
+                     # PPÑ -> PPN, y el usuario debe leer «PPÑ», no «PPN»)
+
+_SQL_GER_CAMPOS = """
+    SELECT TRIM(management) AS ger, TRIM(field) AS campo
+    FROM ops.wells_attributes
+    WHERE NULLIF(TRIM(management),'') IS NOT NULL
+      AND NULLIF(TRIM(field),'') IS NOT NULL
+      AND vice_presidency NOT LIKE 'V%'
+      AND vice_presidency <> '0'
+    GROUP BY 1, 2
+"""
+
+
+def _cargar_ger_campos():
+    global _GER_CAMPOS, _GER_CANON
+    if _GER_CAMPOS is not None:
+        return _GER_CAMPOS
+    try:
+        from app.core.db import get_ops_engine
+        with get_ops_engine().connect() as c:
+            filas = c.execute(sa.text(_SQL_GER_CAMPOS)).all()
+    except Exception:
+        return {}   # ops no disponible → sin cachear: el fallo puede ser transitorio
+    d, canon = {}, {}
+    for ger, campo in filas:
+        k = norm(ger)
+        d.setdefault(k, []).append((campo or "").strip())
+        canon.setdefault(k, (ger or "").strip())   # el nombre TAL COMO lo escribe la fuente
+    _GER_CAMPOS = {k: sorted(set(v)) for k, v in d.items()}
+    _GER_CANON = canon
+    return _GER_CAMPOS
+
+
+def gerencias_vigentes() -> list[str]:
+    """Nombres CANÓNICOS de las gerencias vigentes en la fuente de verdad. [] si ops no está.
+
+    Lo consumen `build_index()` y `maquina_q._nombres()` — UN solo catálogo para el motor.
+    """
+    _cargar_ger_campos()
+    return sorted((_GER_CANON or {}).values())
+
+
+def campos_de_gerencia(gerencia: str) -> list[str]:
+    """Campos que componen una GERENCIA REAL, según ops.wells_attributes. [] si no existe.
+
+    Fuente única de la composición: la usa también `analisis._ambito`, para que el tablero y la
+    conversación no puedan divergir (mismo criterio que `fuentes_de_activo`).
+    """
+    return list(_cargar_ger_campos().get(norm(gerencia or ""), []))
+
+
 def _marcar_puente(r: dict) -> dict:
     """R2: si el nivel resuelto es 'gerencia' pero el valor es EXCLUSIVAMENTE una vicepresidencia en
     robustez, marca r['puente']=True. El nivel de QUERY (r['nivel']) NO se toca — solo afecta cómo se
@@ -214,9 +313,14 @@ def _marcar_puente(r: dict) -> dict:
 # 🔑 NO altera D-D5 (_prioridad_campo): actúa ANTES y solo cuando hay señal explícita. Sin
 # señal, el default sigue siendo Campo — que es la decisión del usuario del 2026-07-15,
 # vigilada por tests/test_cuantificar.py:22 y tests/test_consulta_desambiguacion.py:46.
+# [2026-09-09 · BUG1-GERENCIAS] Se añade GERENCIA con la MISMA adyacencia (nivel + nombre) del
+# diseño del 2026-09-03: sin ella, «¿cuántas gerencias tiene la VP GOR?» (JERARQUIZAR) se
+# etiquetaría por error. El orden se conserva: ACTIVO primero; `_nivel_explicito` devuelve en el
+# primer match.
 _NIVEL_EXPLICITO_RX = (
     (re.compile(r"\b(?:EL|LA|LOS|LAS)?\s*ACTIVOS?\s+", re.I), "activo"),
     (re.compile(r"\b(?:EL|LA|LOS|LAS)?\s*CAMPOS?\s+", re.I), "campo"),
+    (re.compile(r"\b(?:EL|LA|LOS|LAS)?\s*GERENCIAS?\s+", re.I), "gerencia"),
 )
 
 

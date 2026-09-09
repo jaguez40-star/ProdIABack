@@ -48,7 +48,10 @@ def main():
         prod_ok = slots["producto"] == c.get("producto", "crudo")
         ref_ok = slots.get("referencia", "PPTO") == c.get("referencia", "PPTO")
 
-        resuelta = _resolver.resolver_unico(c["entidad"] or c["pregunta"])
+        # [2026-09-09 · BUG1-GERENCIAS] `contexto` = la pregunta ORIGINAL. Sin él, el detector de
+        # nivel explícito (resolver.py:236-259) queda CIEGO en el arnés: `entidad` ya viene reducida
+        # y la palabra «gerencia» se pierde. Es lo mismo que hace respuesta_cuantificar.py:93.
+        resuelta = _resolver.resolver_unico(c["entidad"] or c["pregunta"], contexto=c["pregunta"])
         if resuelta is None or resuelta.get("ambiguo"):
             res = {"aplica": False, "texto": ""}
         else:

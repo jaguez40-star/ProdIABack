@@ -31,6 +31,22 @@
   entidad: "GOR"
   nivel_temporal: N1
   resultado: aplica          # nivel gerencia (dim_fuente.gerencia, catálogo propio de cuantificar)
+# [2026-09-09 · BUG1-GERENCIAS] Gerencias REALES desde la FUENTE ÚNICA DE VERDAD
+# (robustez_v02.ops.wells_attributes). Antes daban "sin_entidad". GOR (arriba) seguía funcionando
+# porque está en dim_fuente — por eso el golden no detectaba nada.
+# ⚠️ Estos 3 casos EXIGEN robustez_v02: en un entorno sin ops (el 139) darán "sin_entidad".
+- pregunta: "¿cuánto produjo la gerencia PPC?"
+  entidad: "PPC"
+  nivel_temporal: N1
+  resultado: aplica          # PPC = {CASTILLA, CASTILLA ESTE, CASTILLA NORTE}
+- pregunta: "¿cuánto ha producido la gerencia PPH en lo que va del año?"
+  entidad: "PPH"
+  nivel_temporal: N2
+  resultado: aplica          # la gerencia con más campos (20 en la fuente, 18 en INGESTA)
+- pregunta: "¿cuánto produjo la gerencia CPI?"
+  entidad: "CPI"
+  nivel_temporal: N1
+  resultado: aplica          # vigente en la fuente de verdad y AUSENTE en la copia (H4)
 
 # ---- N2 acumulado (2) ----
 - pregunta: "¿cuánto ha producido Rubiales en lo que va del año?"

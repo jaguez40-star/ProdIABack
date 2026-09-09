@@ -149,7 +149,13 @@ def _p50_del_mes(resuelta: dict, res: dict) -> dict | None:
     nivel = resuelta.get("nivel")
     vice = resuelta.get("valor") if nivel == "vicepresidencia" else None
     if nivel == "gerencia":
-        vice = (resuelta.get("puente") or {}).get("vp") or None
+        # [2026-09-09 · BUG1-GERENCIAS] `puente` es un BOOLEANO (`resolver.py:201` escribe True),
+        # no un dict. `(True or {}).get("vp")` reventaba con
+        #     AttributeError: 'bool' object has no attribute 'get'
+        # (reproducido). Latente porque casi ninguna gerencia llegaba aquí. Semántica correcta: si
+        # el resolver marcó puente, ese código ES la vicepresidencia. Una gerencia REAL nunca lleva
+        # la marca → None → el panel omite el bloque P50 (el P50 solo existe global y por VP).
+        vice = resuelta.get("valor") if resuelta.get("puente") else None
     # [2026-09-08 · VP-FUENTE-VERDAD] Un CAMPO toma el P50 de SU vicepresidencia. El P50 no se
     # define por campo (p50_referencia.py:6-7), pero la jerarquía sí existe en la fuente de
     # verdad (robustez_v02.ops.wells_attributes) y `vp_de_campo` la resuelve. Medido:

@@ -412,6 +412,23 @@ def _ambito(c, entidad, nivel=None, periodo=None):
         elif col:                                   # nivel específico → columna exacta (D-C2)
             ids = [r[0] for r in c.execute(sa.text(
                 f"SELECT fuente_id FROM core.dim_fuente WHERE UPPER(TRIM({col}))=:e"), {"e": E})]
+            # [2026-09-09 · BUG1-GERENCIAS] Gerencia REAL, desde la FUENTE ÚNICA DE VERDAD
+            # (robustez_v02.ops.wells_attributes). `dim_fuente.gerencia` tiene 13 valores que son
+            # vicepresidencias mal-nombradas; 16 de las 20 gerencias vigentes NO están ahí (las 4
+            # que sí —CPV/GAN/GNS/GXO— resuelven por la columna y no llegan a esta rama).
+            # 🔑 PRECEDENCIA, no reemplazo: solo se compone si la columna NO dio nada. Las 4 que ya
+            #    funcionaban (GOR, GAA…) y los 4 códigos presentes en ambos catálogos (CPV/GAN/GNS/
+            #    GXO) siguen byte a byte por la columna.
+            # 🔑 Mismo patrón que 'activo' (:410-411). Verificado: PPC (mayo 2026) = 93,71 kbopd =
+            #    CASTILLA 54,46 + CASTILLA NORTE 39,25 (CASTILLA ESTE no está en INGESTA → 0).
+            if not ids and nv == "gerencia":
+                from app.features.consulta_v2.cuantificar.resolver import campos_de_gerencia
+                campos = campos_de_gerencia(E)
+                if campos:
+                    ids = [r[0] for r in c.execute(sa.text(
+                        "SELECT fuente_id FROM core.dim_fuente "
+                        "WHERE UPPER(TRIM(campo)) = ANY(:cs)"),
+                        {"cs": [x.upper() for x in campos]})]
         else:                                       # sin nivel → OR-unión + activo + vice (compat, D-C3)
             ids = [r[0] for r in c.execute(sa.text("""
                 SELECT fuente_id FROM core.dim_fuente
@@ -460,15 +477,29 @@ def _ambito(c, entidad, nivel=None, periodo=None):
 
 
 def _campos_sin_meta(c, entidad, fin, nivel):
-    """Campos de un ACTIVO que PRODUCEN pero no tienen PPTO en el mes (por producto).
+    """Campos de un ACTIVO o de una GERENCIA que PRODUCEN pero no tienen PPTO en el mes.
 
-    Solo aplica al nivel 'activo': es el único que agrega varios campos, y por tanto el único
+    Aplica a los niveles que AGREGAN varios campos —'activo' y, desde 2026-09-09, 'gerencia'—:
     donde el REAL sumado puede quedar comparado contra un PPTO que no cubre a todos.
     Devuelve [] para cualquier otro nivel. Nunca inventa presupuesto (ver D-A4).
+
+    [2026-09-09 · BUG1-GERENCIAS] Antes exigía `== "activo"`. Con las gerencias reales resolviendo,
+    ese filtro habría ocultado el aviso justo donde más importa: PPH agrega 20 campos. Verificado
+    con la extensión: PPH (mayo 2026) devuelve ARRAYAN (GAS) sin meta.
     """
-    if (nivel or "").lower() != "activo":
+    nv = (nivel or "").lower()
+    if nv not in ("activo", "gerencia"):
         return []
-    ids = fuentes_de_activo(entidad)
+    if nv == "gerencia":
+        from app.features.consulta_v2.cuantificar.resolver import campos_de_gerencia
+        campos = campos_de_gerencia(entidad)
+        if not campos:
+            return []      # gerencia de dim_fuente (no compone campos) → sin cambio de conducta
+        ids = [r[0] for r in c.execute(sa.text(
+            "SELECT fuente_id FROM core.dim_fuente WHERE UPPER(TRIM(campo)) = ANY(:cs)"),
+            {"cs": [x.upper() for x in campos]})]
+    else:
+        ids = fuentes_de_activo(entidad)
     if not ids:
         return []
     # [BEQ-2026-09-08] bpdeq_m, 3 conceptos, ECP, gas VENTA-GRAVABLE. /1000 en SQL -> kboepd.

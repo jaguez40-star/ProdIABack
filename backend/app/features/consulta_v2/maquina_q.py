@@ -32,6 +32,7 @@ from app.features.consulta_v2 import no_soportado
 from app.features.consulta_v2 import incompleta
 from app.features.consulta_v2 import capacidades
 from app.features.consulta_v2.cuantificar import slots as _slots_dia
+from app.features.consulta_v2.cuantificar import resolver as _resolver_q   # gerencias_vigentes (BUG1)
 
 GRUPO_LABEL = {"jerarquizar": "Jerarquizar", "cuantificar": "Cuantificar",
                "analizar": "Analizar", "desconocido": "Desconocido"}
@@ -541,6 +542,14 @@ def _nombres():
         return set()   # sin cachear: reintenta en la próxima llamada
     if not ok:
         return set()
+    # [2026-09-09 · BUG1-GERENCIAS] Las gerencias REALES desde la FUENTE ÚNICA DE VERDAD, con la
+    # MISMA función que usa el resolver de Cuantificar → un solo catálogo en la ruta. Medido antes:
+    # «la gerencia CPI» daba detectar_entidad=None (la copia no trae CPI) y solo se salvaba por el
+    # backstop de n-gramas. `gerencias_vigentes()` nunca lanza: sin ops devuelve [].
+    for g in _resolver_q.gerencias_vigentes():
+        k = norm(g)
+        if k:
+            nombres.add(k)
     _NOMBRES = nombres
     return nombres
 
