@@ -474,10 +474,19 @@ def _responder_core(texto: str, entidad: str | None = None, usuario=None, conver
     if sub == "senda":
         _s = senda_fn(anio=2026)
         _serie = (_s or {}).get("serie") or []
-        # [2026-09-10 · SENDA-SOLO-FUTURO] Futuro ESTRICTO (`mes > ultimo_mes_real + 1`), no
-        # «meses sin cerrar»: el mes EN CURSO aún no tiene escenario REAL, así que el filtro
-        # anterior (`not es_real`) lo metía en la senda estando ya corriendo. Decisión del
-        # usuario: proyección es lo que no ha pasado.
+        # [2026-09-10 · SENDA-SOLO-FUTURO] Futuro = los meses que NO han cerrado, es decir
+        # `mes > ultimo_mes_real`. Decisión del usuario: proyección es lo que no ha pasado.
+        # [2026-09-10 · SENDA-OCTUBRE] Antes decía `> ultimo_mes_real + 1`. Ese `+1` nació para
+        # excluir el mes EN CURSO cuando el último cerrado era agosto y septiembre corría: con
+        # umr=8, `mes > 9` daba oct-dic, correcto. Pero en cuanto septiembre CERRÓ (umr=9) la
+        # misma fórmula pasó a pedir `mes > 10` y se comió OCTUBRE, que ya es futuro legítimo.
+        # La suposición falsa era "el mes en curso es siempre ultimo_mes_real + 1": al cerrar un
+        # mes, el siguiente deja de estar por delante del corte.
+        # 🔑 Sin el `+1`, este filtro coincide EXACTAMENTE con `es_real == False`, que es lo que
+        #    usa el gráfico de contexto del panel para pintar de ámbar. Ese desacuerdo era el
+        #    síntoma: el contexto dibujaba octubre como proyectado y el detalle lo escondía.
+        #    Medido en el servidor 2026-09-10: umr=9, septiembre es_real=True (714,2 cerrado),
+        #    oct/nov/dic es_real=False.
         # 🔑 UN SOLO FILTRO para los dos consumidores. `_s_chat` alimenta el TEXTO
         #    (_plantilla.senda) y la GRÁFICA (panel.datos): así no pueden desincronizarse, que
         #    era el riesgo real — un texto hablando de cuatro meses sobre una gráfica de tres.
@@ -488,7 +497,7 @@ def _responder_core(texto: str, entidad: str | None = None, usuario=None, conver
         #    de plantilla.senda() sigue teniendo con qué cortar.
         _umr = (_s or {}).get("ultimo_mes_real") or 0
         _fut = [m for m in _serie
-                if (m.get("mes") or 0) > _umr + 1 and m.get("total") is not None]
+                if (m.get("mes") or 0) > _umr and m.get("total") is not None]
         if not _fut:
             return {"mensaje": "No tengo la senda proyectada para el resto del año.",
                     "panel": None}

@@ -346,23 +346,26 @@ def senda(d, entidad) -> str:
     """
     scope = entidad or "la producción ECP"
     serie = (d or {}).get("serie") or []
-    # [2026-09-10 · SENDA-SOLO-FUTURO] PROYECCIÓN = meses estrictamente FUTUROS, no «meses sin
-    # cerrar». `es_real` significa "tiene escenario REAL", y el mes EN CURSO todavía no lo tiene:
-    # con el filtro anterior (`not es_real`) septiembre entraba en la senda estando ya corriendo.
-    # Su cifra es una proyección de CIERRE DE MES mezclada con lo ya producido — otra cosa que
-    # oct/nov/dic, y presentarlas juntas las iguala. Decisión del usuario 2026-09-10: «por eso se
-    # llama proyección, muestra es lo futuro».
+    # [2026-09-10 · SENDA-SOLO-FUTURO] PROYECCIÓN = los meses que aún no han cerrado, es decir
+    # `mes > ultimo_mes_real`. Decisión del usuario: «por eso se llama proyección, muestra es lo
+    # futuro».
+    # [2026-09-10 · SENDA-OCTUBRE] Antes decía `> umr + 1`. Ese `+1` excluía el mes EN CURSO
+    # mientras el último cerrado era agosto y septiembre corría; en cuanto septiembre CERRÓ
+    # (umr=9) la fórmula pasó a pedir `mes > 10` y se comió OCTUBRE, que ya es futuro. La
+    # suposición falsa era «el mes en curso es siempre umr + 1»: al cerrar un mes, el siguiente
+    # deja de estar por delante del corte. Este filtro y el de respuesta_analizar.py cambian
+    # SIEMPRE a la vez, o el texto y el panel dejan de coincidir.
     # 🔑 El corte sale del DATO (`ultimo_mes_real`, que el endpoint ya emite en
     #    analisis/api.py:3057-3059), NO del reloj del servidor: así el texto y la gráfica cortan
     #    por el mismo sitio aunque el proceso lleve días levantado o la ingesta vaya atrasada.
     # 🔑 IDEMPOTENTE a propósito: respuesta_analizar.py ya pasa la serie filtrada, y volver a
     #    aplicar el mismo corte sobre ella da lo mismo. Se conserva aquí para que la función siga
     #    siendo correcta si algún día se la llama con la respuesta completa del endpoint.
-    # 🔑 Default 0 defensivo: sin el campo, `mes > 1` deja casi toda la serie — degradación suave,
+    # 🔑 Default 0 defensivo: sin el campo, `mes > 0` deja toda la serie — degradación suave,
     #    nunca una lista vacía silenciosa.
     umr = (d or {}).get("ultimo_mes_real") or 0
     futuros = [m for m in serie
-               if (m.get("mes") or 0) > umr + 1 and m.get("total") is not None]
+               if (m.get("mes") or 0) > umr and m.get("total") is not None]
     if not futuros:
         return f"📊 {scope}\nNo tengo la senda proyectada para el resto del año."
     u = (d or {}).get("unidad") or "kboepd"
