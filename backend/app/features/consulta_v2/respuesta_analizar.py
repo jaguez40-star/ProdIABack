@@ -499,16 +499,20 @@ def _responder_core(texto: str, entidad: str | None = None, usuario=None, conver
         mensaje = respuesta_base.envolver(
             intro, cuerpo, "¿Quieres el detalle de un mes, o la brecha contra el P50?")
         # [2026-09-10 · SENDA-CHAT] El panel viaja con la respuesta del endpoint, igual que
-        # `p50_cards` con /analisis/president: el frontend ya sabe pintarla (__cnSendaPlotInto) y
-        # no hay que re-fetchear lo que ya está en la mano. Antes devolvía `panel: None` y la
-        # senda salía solo como texto — la gráfica existía, pero solo en el tablero.
-        # [2026-09-10 · SENDA-SOLO-FUTURO] Al CHAT viaja `_s_chat` (solo meses futuros). El filtro
-        # vive aquí y no en el JS a propósito: __cnSendaPlotInto está COMPARTIDA con el tablero,
-        # que llega por otro camino (__cnPaintSenda fetchea el endpoint por su cuenta) y debe
-        # seguir pintando los 12 meses. Filtrando el dato en origen, el tablero ni se entera y no
-        # hace falta meterle una bandera a una función que el propio archivo declara que debe
-        # tener "un solo layout, un solo sitio donde arreglar" (multitab_shell.js:6301-6305).
-        return {"mensaje": mensaje, "panel": {"tipo": "analiza_senda", "datos": _s_chat}}
+        # `p50_cards` con /analisis/president: el frontend ya sabe pintarla y no hay que
+        # re-fetchear lo que ya está en la mano.
+        # [2026-09-10 · SENDA-PANEL] El panel pasó de un gráfico a TRES piezas (año en líneas,
+        # zoom de la proyección, tabla), así que necesita la serie COMPLETA — la mitad de
+        # contexto dibuja enero a diciembre. Pero el corte NO se duplica en el JS: el backend
+        # sigue siendo el único que decide qué es futuro y manda la LISTA ya resuelta en
+        # `meses_futuros`. El frontend la obedece, no la recalcula.
+        # 🔑 Si el JS reimplantara la regla `mes > ultimo_mes_real + 1`, habría dos versiones de
+        #    la misma decisión y bastaría tocar una para que el texto y la gráfica dejaran de
+        #    coincidir. Es exactamente el fallo que el plan anterior vino a cerrar.
+        # 🔑 El TEXTO se sigue construyendo con `_s_chat` (solo futuros): no cambia ni una coma.
+        _s_panel = dict(_s or {})
+        _s_panel["meses_futuros"] = [m.get("mes") for m in _fut]
+        return {"mensaje": mensaje, "panel": {"tipo": "analiza_senda", "datos": _s_panel}}
 
     # 5) Cuerpo determinista por sub-intención (VERBATIM de la data del ejecutivo).
     panel = None
