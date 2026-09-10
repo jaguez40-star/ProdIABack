@@ -346,7 +346,23 @@ def senda(d, entidad) -> str:
     """
     scope = entidad or "la producción ECP"
     serie = (d or {}).get("serie") or []
-    futuros = [m for m in serie if not m.get("es_real") and m.get("total") is not None]
+    # [2026-09-10 · SENDA-SOLO-FUTURO] PROYECCIÓN = meses estrictamente FUTUROS, no «meses sin
+    # cerrar». `es_real` significa "tiene escenario REAL", y el mes EN CURSO todavía no lo tiene:
+    # con el filtro anterior (`not es_real`) septiembre entraba en la senda estando ya corriendo.
+    # Su cifra es una proyección de CIERRE DE MES mezclada con lo ya producido — otra cosa que
+    # oct/nov/dic, y presentarlas juntas las iguala. Decisión del usuario 2026-09-10: «por eso se
+    # llama proyección, muestra es lo futuro».
+    # 🔑 El corte sale del DATO (`ultimo_mes_real`, que el endpoint ya emite en
+    #    analisis/api.py:3057-3059), NO del reloj del servidor: así el texto y la gráfica cortan
+    #    por el mismo sitio aunque el proceso lleve días levantado o la ingesta vaya atrasada.
+    # 🔑 IDEMPOTENTE a propósito: respuesta_analizar.py ya pasa la serie filtrada, y volver a
+    #    aplicar el mismo corte sobre ella da lo mismo. Se conserva aquí para que la función siga
+    #    siendo correcta si algún día se la llama con la respuesta completa del endpoint.
+    # 🔑 Default 0 defensivo: sin el campo, `mes > 1` deja casi toda la serie — degradación suave,
+    #    nunca una lista vacía silenciosa.
+    umr = (d or {}).get("ultimo_mes_real") or 0
+    futuros = [m for m in serie
+               if (m.get("mes") or 0) > umr + 1 and m.get("total") is not None]
     if not futuros:
         return f"📊 {scope}\nNo tengo la senda proyectada para el resto del año."
     u = (d or {}).get("unidad") or "kboepd"
@@ -359,14 +375,23 @@ def senda(d, entidad) -> str:
         p50s = " / ".join(_fmt(m["p50"], "CRUDO") for m in futuros)
         b0 = futuros[0]["total"] - futuros[0]["p50"]
         b1 = futuros[-1]["total"] - futuros[-1]["p50"]
-        if abs(b1) < abs(b0) - 1e-6:
-            verbo = "se estrecha"
-        elif abs(b1) > abs(b0) + 1e-6:
-            verbo = "se amplía"
+        # [2026-09-10 · SENDA-SOLO-FUTURO] Con UN SOLO mes futuro (pasará en noviembre, cuando
+        # solo quede diciembre) b0 y b1 son el MISMO punto: ninguna comparación se cumple, el
+        # verbo caía en "se mantiene" y la frase salía «la brecha se mantiene de -12,3 a -12,3».
+        # Un mes no tiene trayectoria, tiene una cifra — y así se dice. Llega solo con el
+        # calendario, sin que nadie toque el código; por eso se cierra ahora.
+        if len(futuros) < 2:
+            linea += (f"\nContra el compromiso P50 ({p50s}) la brecha es de "
+                      f"{_fmt(b0, 'CRUDO')} {u}.")
         else:
-            verbo = "se mantiene"
-        linea += (f"\nContra el compromiso P50 ({p50s}) la brecha {verbo} de "
-                  f"{_fmt(b0, 'CRUDO')} a {_fmt(b1, 'CRUDO')} {u}.")
+            if abs(b1) < abs(b0) - 1e-6:
+                verbo = "se estrecha"
+            elif abs(b1) > abs(b0) + 1e-6:
+                verbo = "se amplía"
+            else:
+                verbo = "se mantiene"
+            linea += (f"\nContra el compromiso P50 ({p50s}) la brecha {verbo} de "
+                      f"{_fmt(b0, 'CRUDO')} a {_fmt(b1, 'CRUDO')} {u}.")
     anio = (d or {}).get("anio") or ""
     return f"📊 {scope} · resto de {anio}\n{linea}"
 

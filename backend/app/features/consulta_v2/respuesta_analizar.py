@@ -474,19 +474,41 @@ def _responder_core(texto: str, entidad: str | None = None, usuario=None, conver
     if sub == "senda":
         _s = senda_fn(anio=2026)
         _serie = (_s or {}).get("serie") or []
-        _fut = [m for m in _serie if not m.get("es_real") and m.get("total") is not None]
+        # [2026-09-10 · SENDA-SOLO-FUTURO] Futuro ESTRICTO (`mes > ultimo_mes_real + 1`), no
+        # «meses sin cerrar»: el mes EN CURSO aún no tiene escenario REAL, así que el filtro
+        # anterior (`not es_real`) lo metía en la senda estando ya corriendo. Decisión del
+        # usuario: proyección es lo que no ha pasado.
+        # 🔑 UN SOLO FILTRO para los dos consumidores. `_s_chat` alimenta el TEXTO
+        #    (_plantilla.senda) y la GRÁFICA (panel.datos): así no pueden desincronizarse, que
+        #    era el riesgo real — un texto hablando de cuatro meses sobre una gráfica de tres.
+        #    Mismo patrón que la rama `tendencia` de arriba, que calcula `_t` una vez y de ahí
+        #    salen mensaje y panel.
+        # 🔑 dict(_s) es copia SUPERFICIAL: se reemplaza la lista `serie`, no se muta ningún mes
+        #    ni el `_s` original. `ultimo_mes_real` viaja dentro, así que el filtro idempotente
+        #    de plantilla.senda() sigue teniendo con qué cortar.
+        _umr = (_s or {}).get("ultimo_mes_real") or 0
+        _fut = [m for m in _serie
+                if (m.get("mes") or 0) > _umr + 1 and m.get("total") is not None]
         if not _fut:
             return {"mensaje": "No tengo la senda proyectada para el resto del año.",
                     "panel": None}
-        cuerpo = _plantilla.senda(_s, ent_valor)
+        _s_chat = dict(_s or {})
+        _s_chat["serie"] = _fut
+        cuerpo = _plantilla.senda(_s_chat, ent_valor)
         intro = _intro(alcance, usuario)
         mensaje = respuesta_base.envolver(
             intro, cuerpo, "¿Quieres el detalle de un mes, o la brecha contra el P50?")
-        # [2026-09-10 · SENDA-CHAT] El panel viaja con la respuesta cruda del endpoint, igual que
+        # [2026-09-10 · SENDA-CHAT] El panel viaja con la respuesta del endpoint, igual que
         # `p50_cards` con /analisis/president: el frontend ya sabe pintarla (__cnSendaPlotInto) y
         # no hay que re-fetchear lo que ya está en la mano. Antes devolvía `panel: None` y la
         # senda salía solo como texto — la gráfica existía, pero solo en el tablero.
-        return {"mensaje": mensaje, "panel": {"tipo": "analiza_senda", "datos": _s}}
+        # [2026-09-10 · SENDA-SOLO-FUTURO] Al CHAT viaja `_s_chat` (solo meses futuros). El filtro
+        # vive aquí y no en el JS a propósito: __cnSendaPlotInto está COMPARTIDA con el tablero,
+        # que llega por otro camino (__cnPaintSenda fetchea el endpoint por su cuenta) y debe
+        # seguir pintando los 12 meses. Filtrando el dato en origen, el tablero ni se entera y no
+        # hace falta meterle una bandera a una función que el propio archivo declara que debe
+        # tener "un solo layout, un solo sitio donde arreglar" (multitab_shell.js:6301-6305).
+        return {"mensaje": mensaje, "panel": {"tipo": "analiza_senda", "datos": _s_chat}}
 
     # 5) Cuerpo determinista por sub-intención (VERBATIM de la data del ejecutivo).
     panel = None
