@@ -57,6 +57,13 @@ _CUMPLIMIENTO = ("CUMPLI", "COMPROMISO")
 #    tupla con esas formas los rompe a los cuatro.
 # 🔑 "HASTA" nunca va suelto: "HASTA AHORA"/"HASTA LA FECHA" son ACUMULADO (cuantificar/
 #    slots.py:27) y robárselos rompería el YTD, que hoy funciona. Solo frases completas.
+# [2026-09-10 · PANORAMA] «¿Cuál es el panorama general de producción?» -> la lámina del AÑO
+# (barras apiladas ECP+Filiales, real cerrado y proyectado, con la línea de meta P50). Es el
+# gráfico que hasta hoy se pintaba solo al abrir el tablero y que ahora se pide por su nombre.
+# 🔑 Exige las DOS palabras juntas: «panorama» a secas es demasiado común y se llevaría
+#    preguntas de causal. Frase acotada, a petición del usuario.
+_PANORAMA = ("PANORAMA GENERAL",)
+
 _FUTURO = ("RESTO DEL ANO", "LO QUE QUEDA DEL ANO", "LO QUE RESTA DEL ANO",
            "PROXIMOS MESES", "SIGUIENTES MESES", "MESES QUE VIENEN", "MESES RESTANTES",
            "CIERRE DE ANO", "CIERRE DEL ANO", "FIN DE ANO", "FINAL DEL ANO",
@@ -104,6 +111,11 @@ def sub_intencion(texto: str) -> str:
     #   · «¿cuánto vamos a producir hasta diciembre?» -> senda, meses futuros (aquí)
     #   · «¿vamos a cerrar en meta?» -> pace del mes en curso (_PROY, abajo)
     # Sin este orden, _PROY captura "VAMOS A" y la senda no se alcanza nunca.
+    # [2026-09-10 · PANORAMA] ANTES de _FUTURO: «panorama general» pide el AÑO ENTERO (real +
+    # proyectado), mientras que senda responde solo los meses que faltan. Si una pregunta
+    # trajera las dos señales, la vista completa es la que el usuario nombró.
+    if any(k in t for k in _PANORAMA):
+        return "panorama"
     if any(k in t for k in _FUTURO):
         return "senda"
     if any(k in t for k in _PROY):

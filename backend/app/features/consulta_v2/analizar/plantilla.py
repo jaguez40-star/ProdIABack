@@ -329,6 +329,53 @@ def proyeccion(d, entidad) -> str:
     return f"📊 {scope} · {periodo}\nPROYECCIÓN · crudo: {linea}."
 
 
+def panorama(d, entidad) -> str:
+    """Panorama del AÑO: lo cerrado, lo proyectado y cómo va contra la meta P50.
+
+    [2026-09-10 · PANORAMA] Acompaña a la lámina de barras apiladas. A diferencia de `senda()`
+    —que solo habla de los meses que faltan— aquí se resume el año entero, porque eso es lo que
+    el gráfico muestra.
+    🔑 Mismo contrato que `senda`: dos posicionales, devuelve str, nunca None, nunca lanza.
+    🔑 La UNIDAD se lee de `d["unidad"]` (kboepd, equivalente), NUNCA de _UNIDAD["CRUDO"]: el
+       total incluye gas y filiales convertidos.
+    """
+    scope = entidad or "la producción ECP"
+    serie = (d or {}).get("serie") or []
+    con_dato = [m for m in serie if m.get("total") is not None]
+    if not con_dato:
+        return f"📊 {scope}\nNo tengo la serie anual de producción."
+    u = (d or {}).get("unidad") or "kboepd"
+    anio = (d or {}).get("anio") or ""
+    cerrados = [m for m in con_dato if m.get("es_real")]
+    futuros = [m for m in con_dato if not m.get("es_real")]
+
+    partes = []
+    if cerrados:
+        prom = sum(m["total"] for m in cerrados) / len(cerrados)
+        ult = cerrados[-1]
+        partes.append(
+            f"CERRADO · {len(cerrados)} meses a un promedio de {_fmt(prom, 'CRUDO')} {u}; "
+            f"el último, {(ult.get('mes_nombre') or '').lower()}, en {_fmt(ult['total'], 'CRUDO')}")
+    if futuros:
+        partes.append(
+            "PROYECTADO · " + " · ".join(
+                f"{(m.get('mes_nombre') or '').lower()} {_fmt(m['total'], 'CRUDO')}"
+                for m in futuros) + f" {u}")
+
+    # Cómo va el año contra la meta: solo si TODOS los meses con dato traen su P50 — a medias
+    # sería peor que callarlo (regla madre: no completar con huecos).
+    if all(m.get("p50") is not None for m in con_dato):
+        meta = sum(m["p50"] for m in con_dato) / len(con_dato)
+        real = sum(m["total"] for m in con_dato) / len(con_dato)
+        brecha = real - meta
+        verbo = "por encima de" if brecha > 0 else "por debajo de"
+        partes.append(
+            f"Contra la meta P50 ({_fmt(meta, 'CRUDO')} {u} de promedio) el año va {verbo} "
+            f"la meta en {_fmt(abs(brecha), 'CRUDO')} {u}")
+
+    return f"📊 {scope} · panorama {anio}\n" + ".\n".join(partes) + "."
+
+
 def senda(d, entidad) -> str:
     """Senda mensual proyectada hasta diciembre, desde /president/senda.
 

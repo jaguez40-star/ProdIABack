@@ -464,6 +464,28 @@ def _responder_core(texto: str, entidad: str | None = None, usuario=None, conver
             }}
         return {"mensaje": mensaje, "panel": panel}
 
+    # [2026-09-10 · PANORAMA] «¿Cuál es el panorama general de producción?» -> la lámina del AÑO
+    # ENTERO: barras apiladas Ecopetrol+Filiales, real cerrado y proyectado, con la meta P50.
+    # Es el gráfico que vivía en el tablero y que ahora se pide por su nombre.
+    # 🔑 Va ANTES de `senda` y con `return` propio, mismo motivo que ella: sin esto caería al
+    #    if/else de abajo y aterrizaría en el análisis causal, respondiendo otra cosa con
+    #    seguridad.
+    # 🔑 El panel manda la serie COMPLETA (12 meses) sin filtrar: el panorama es justamente el
+    #    año entero. La distinción real/proyectado la lleva cada mes en su `es_real`, que es lo
+    #    que el pintor de barras usa para el color y el rayado.
+    if sub == "panorama":
+        _p = senda_fn(anio=2026)
+        _pserie = (_p or {}).get("serie") or []
+        _pcon = [m for m in _pserie if m.get("total") is not None]
+        if not _pcon:
+            return {"mensaje": "No tengo la serie anual de producción para el panorama.",
+                    "panel": None}
+        cuerpo = _plantilla.panorama(_p, ent_valor)
+        intro = _intro(alcance, usuario)
+        mensaje = respuesta_base.envolver(
+            intro, cuerpo, "¿Quieres el detalle de un mes, o la proyección hasta diciembre?")
+        return {"mensaje": mensaje, "panel": {"tipo": "analiza_panorama", "datos": _p}}
+
     # [2026-09-08 · SENDA-DIC] Senda proyectada hasta diciembre. Va ANTES del bloque 5 y con
     # `return` propio, igual que `tendencia`: si cayera al if/else de abajo, `senda` no
     # matchearía "proyeccion" y aterrizaría en el `else` -> análisis causal del mes en curso,

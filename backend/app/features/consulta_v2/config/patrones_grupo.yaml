@@ -269,6 +269,13 @@ grupos:
     - 'RITMO\s+DE\s+(CAIDA|DECLIN\w*)'
     - 'COMO\s+VIENE'
     - '(VIENE|VA)\s+(SUBIENDO|BAJANDO|CAYENDO)'
+    # [2026-09-10 · PANORAMA] «¿Cuál es el panorama general de producción?» pide la vista del
+    # AÑO (real cerrado + proyectado + meta P50), no una cifra: es Analizar. Hoy la atrapaba
+    # 'PRODUCCION' de cuantificar y respondía otra cosa.
+    # 🔑 Exige PANORAMA + GENERAL juntos, no «panorama» suelto: «panorama del activo X» o
+    #    «panorama de agosto» son preguntas distintas que hoy funcionan por otras rutas, y
+    #    ensanchar esto se las robaría. Frase acotada a la que el usuario pidió.
+    - 'PANORAMA\s+GENERAL'
     # [2026-09-10 · SENDA-CHAT] HORIZONTE FUTURO. La capacidad `senda` existe desde el 2026-09-08
     # (analizar/subrouter.py:60-64 `_FUTURO`, respuesta_analizar.py:474-485) pero la Capa 1 nunca
     # le entregaba la pregunta: «¿cuánto vamos a producir en los próximos meses hasta diciembre?»
