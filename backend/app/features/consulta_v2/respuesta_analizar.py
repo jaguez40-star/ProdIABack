@@ -482,7 +482,11 @@ def _responder_core(texto: str, entidad: str | None = None, usuario=None, conver
         intro = _intro(alcance, usuario)
         mensaje = respuesta_base.envolver(
             intro, cuerpo, "¿Quieres el detalle de un mes, o la brecha contra el P50?")
-        return {"mensaje": mensaje, "panel": None}
+        # [2026-09-10 · SENDA-CHAT] El panel viaja con la respuesta cruda del endpoint, igual que
+        # `p50_cards` con /analisis/president: el frontend ya sabe pintarla (__cnSendaPlotInto) y
+        # no hay que re-fetchear lo que ya está en la mano. Antes devolvía `panel: None` y la
+        # senda salía solo como texto — la gráfica existía, pero solo en el tablero.
+        return {"mensaje": mensaje, "panel": {"tipo": "analiza_senda", "datos": _s}}
 
     # 5) Cuerpo determinista por sub-intención (VERBATIM de la data del ejecutivo).
     panel = None

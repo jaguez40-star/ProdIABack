@@ -294,3 +294,19 @@
 # no dice de qué. Meterlo al vocabulario abriría «¿cuántos pasos llevamos?». Sigue fuera.
 - pregunta: "¿Cuánto llevamos este mes?"
   esperado: desconocido
+
+# ---- Senda / horizonte futuro (2026-09-10 · SENDA-CHAT) ----
+# CUANTO + horizonte futuro colisionan y gana analizar (precedencia_colision). Antes solo
+# atrapaba cuantificar y la senda a diciembre nunca se respondía. Los negativos fijan que el
+# mes en curso y el acumulado pasado siguen en cuantificar (H3/H4 del plan SENDA-CHAT).
+- pregunta: "¿Cuánto vamos a producir en los próximos meses hasta diciembre?"
+  esperado: analizar
+- pregunta: "¿Cómo se ve el cierre de año?"
+  esperado: analizar
+- pregunta: "¿Qué producción esperamos los próximos meses?"
+  esperado: analizar
+# NEGATIVOS
+- pregunta: "¿Cuánto vamos a producir este mes?"
+  esperado: cuantificar
+- pregunta: "¿Cuánto crudo acumulamos hasta diciembre?"
+  esperado: cuantificar

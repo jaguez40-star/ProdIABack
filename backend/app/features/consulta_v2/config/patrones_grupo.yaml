@@ -269,6 +269,29 @@ grupos:
     - 'RITMO\s+DE\s+(CAIDA|DECLIN\w*)'
     - 'COMO\s+VIENE'
     - '(VIENE|VA)\s+(SUBIENDO|BAJANDO|CAYENDO)'
+    # [2026-09-10 · SENDA-CHAT] HORIZONTE FUTURO. La capacidad `senda` existe desde el 2026-09-08
+    # (analizar/subrouter.py:60-64 `_FUTURO`, respuesta_analizar.py:474-485) pero la Capa 1 nunca
+    # le entregaba la pregunta: «¿cuánto vamos a producir en los próximos meses hasta diciembre?»
+    # solo disparaba 'CUANT[OA]S?\b' de cuantificar; con UN solo grupo atrapando, patrones.py:65-67
+    # retorna ANTES de mirar precedencia_colision. Medido 2026-09-10: 3 de los 4 casos `sub: senda`
+    # del golden de analizar no llegaban a analizar (dos a cuantificar, uno al LLM). Con este patrón
+    # hay colisión y analizar gana.
+    # 🔑 Las alternativas son las de `_FUTURO` VERBATIM (mismo texto normalizado). Si `_FUTURO`
+    #    cambia, cambiar aquí también.
+    # 🔑 NO lleva 'VAMOS\s+A\s+PRODUCIR' suelto: «cuánto vamos a producir ESTE MES» es cuantificar
+    #    (mes en curso) y senda respondería los meses futuros — el bug del periodo ignorado al revés.
+    #    Y «vamos a cerrar/llegar/alcanzar» son de _PROY (pace del mes), fijados por 4 tests
+    #    (test_analizar.py:30, test_analizar_tendencia.py:64, test_p50_referencia.py:32, y el
+    #    golden :18/:131).
+    # 🔑 NO lleva 'HASTA\s+DICIEMBRE' suelto: «cuánto acumulamos hasta diciembre» (año cerrado) es
+    #    ACUMULADO de cuantificar (slots.py:27). Solo con el verbo delante: PRODUCIR HASTA DICIEMBRE.
+    # NO se ancla (fuera de patrones_anclados): «cierre de año» y «fin de año» son español común
+    # (la fiesta de fin de año, el cierre contable). Verificado 2026-09-10:
+    # nivel_dominio("que hacemos en la fiesta de fin de ano") es None → el filtro de dominio de
+    # maquina_q.py:613-621 la manda a desconocido, que es lo correcto. Anclarlo repetiría el error
+    # del 2026-08-02 ('META\b', 'COMO VAMOS'). La pregunta del bug pasa el filtro por PRODUCIR
+    # (vocabulario_dominio.yaml:62).
+    - '(RESTO\s+DEL\s+ANO|LO\s+QUE\s+(QUEDA|RESTA)\s+DEL\s+ANO|PROXIMOS\s+MESES|SIGUIENTES\s+MESES|MESES\s+QUE\s+VIENEN|MESES\s+RESTANTES|CIERRE\s+DEL?\s+ANO|FIN(AL)?\s+DEL?\s+ANO|HASTA\s+FIN(AL)?\s+DE\s+ANO|DE\s+AQUI\s+A\s+(DICIEMBRE|FIN\s+DE\s+ANO)|PRODUCIR\s+HASTA\s+DICIEMBRE)'
 
 # Colisión (2+ grupos atrapan): gana el primero de esta lista. Razón (motor_Q.md §1.1):
 # con señales mixtas la pregunta casi siempre quiere el nivel más profundo — "¿cuánto nos
